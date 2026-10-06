@@ -6,6 +6,7 @@
     "dtype": "auto",
     "device_map": "auto",
     "max_memory": null,
+    "gptq_backend": null,
     "attention_implementation": "sdpa",
     "local_files_only": false
   },

@@ -27,6 +27,24 @@ def project_path(value):
     return path if path.is_absolute() else ROOT / path
 
 
+def checkpoint_load_options(model_id, backend, common):
+    """Choose a GPTQ runtime without changing checkpoint quantization settings."""
+    if backend is None:
+        return {}
+    if not isinstance(backend, str) or not backend.strip():
+        raise ValueError('model.gptq_backend must be null or a non-empty backend name.')
+    from transformers import AutoConfig
+
+    checkpoint = AutoConfig.from_pretrained(model_id, **common)
+    quantization = getattr(checkpoint, 'quantization_config', None)
+    if hasattr(quantization, 'to_dict'):
+        quantization = quantization.to_dict()
+    if not isinstance(quantization, dict) or quantization.get('quant_method') != 'gptq':
+        raise ValueError('model.gptq_backend requires a GPTQ checkpoint; use null for other models.')
+    checkpoint.quantization_config = {**quantization, 'backend': backend.strip().lower()}
+    return {'config': checkpoint}
+
+
 def read_tsv(path):
     with path.open(encoding='utf-8-sig', newline='') as stream:
         reader = csv.DictReader(stream, delimiter='\t')
@@ -257,10 +275,11 @@ def main():
         max_memory = {int(key) if key.isdigit() else key: value
                       for key, value in max_memory.items()}
     common = {'revision': options['revision'], 'local_files_only': options['local_files_only']}
+    load_options = checkpoint_load_options(config['model_id'], options.get('gptq_backend'), common)
     tokenizer = AutoTokenizer.from_pretrained(config['model_id'], **common)
     model = AutoModelForCausalLM.from_pretrained(
         config['model_id'], dtype=options['dtype'], device_map=options['device_map'],
-        max_memory=max_memory, attn_implementation=options['attention_implementation'], **common)
+        max_memory=max_memory, attn_implementation=options['attention_implementation'], **load_options, **common)
     model.eval()
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
