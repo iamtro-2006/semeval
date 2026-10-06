@@ -18,6 +18,16 @@ Decisions:
 Canonical codes:
 l = lesbian; g = gay; b = bisexual; t = transgender; q = queer or questioning; i = intersex; a = asexual, aromantic, or agender; nb = non-binary; lgbtqia+ = the LGBTQIA+ community as a whole.
 
+On purpose of identifying accurate identity, please refer to this acronym breakdown (just most cases will follow this definition, not all).
+• L - Lesbian: A woman who is attracted to women.
+• G - Gay: A person, often a man, who is attracted to people of the same gender.
+• B - Bisexual: A person attracted to more than one gender.
+• T - Transgender: A person whose gender identity differs from the sex they were assigned at birth.
+• Q - Queer / Questioning: Queer is an umbrella term for sexual and gender minorities, while questioning refers to people who are exploring their identity.
+• I - Intersex: A person born with reproductive or sexual anatomy that does not fit typical definitions of male or female.
+• A - Asexual / Aromantic / Agender: Asexual means experiencing little or no sexual attraction. Aromantic means experiencing little or no romantic attraction. Agender means identifying as having no specific gender. (The "A" is sometimes also used for allies, though debate exists on whether allies are part of the acronym since they are not a marginalized group).
+• + (Plus): Represents other identities not explicitly named by the letters, such as pansexual or non-binary
+
 Evidence fields: yt_comment, yt_title, yt_description. Each item is {"field":"source field","quote":"exact source span"}. Copy a short contiguous word, phrase, or sentence verbatim, preserving case and punctuation; escape quotes/backslashes correctly in JSON. NEVER translate, rewrite, add quotation marks, or stitch spans. Use separate items for different fields and explain their link. Unrelated context mentions are not evidence for a label.
 
 For no hateful target or insufficient evidence, return scope={"label":"none","evidence":[]}, identity=[], target="none", and a brief reason. Missing context is NOT permission to guess.
