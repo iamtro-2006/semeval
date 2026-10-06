@@ -1,1 +1,1 @@
-StereoQueerEval_id	language	input_variant	prompt_mode	gold	pred_target	valid	error	evidence_json	raw_output	input_tokens	output_tokens	latency_seconds
+StereoQueerEval_id	language	input_variant	prompt_mode	gold	pred_target	valid	error	annotation_valid	annotation_error	evidence_json	raw_output	input_tokens	output_tokens	latency_seconds

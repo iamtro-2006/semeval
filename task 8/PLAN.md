@@ -194,27 +194,29 @@ Parser từ chối evidence lấy từ trường không được đưa vào base
 
 Output thống nhất theo thứ tự:
 
-1. `entities`: người/cộng đồng bị nhắm tới, reference evidence và targeting
-   evidence từ comment. Reference có thể cần title/description để giải
-   pronoun hoặc diễn đạt gián tiếp.
-2. `scope`: nhãn group/individual cùng các cặp entity–evidence chứng minh
-   phạm vi; không suy scope chỉ từ title của video.
-3. `identities`: đủ chín code. Mỗi code có các cặp entity–evidence hoặc
-   chuỗi `none` nếu không có cặp được hỗ trợ.
-4. `target`: ghép scope với đúng các identity đã có bằng chứng.
+1. `scope`: object có `label` (individual/group/none) và danh sách `evidence`;
+   xác định đối tượng bị nhắm tới, không suy scope chỉ từ title của video.
+2. `identity`: danh sách các object có `label` và `evidence`, chỉ liệt kê
+   identity được hỗ trợ, theo thứ tự chuẩn; không liệt kê chín mã với none.
+3. `target`: ghép scope với đúng các identity đã có bằng chứng.
+4. `reasoning`: một câu tiếng Anh ngắn giải thích đối tượng và liên kết
+   evidence với nhãn. Không xuất phần giải thích ngoài JSON.
 
 Ví dụ khái niệm: `l` phải gắn với một người/nhóm cụ thể, kèm đoạn text
 chứng minh lesbian; không chỉ trả `l` vì video có nhắc từ đó. `g`, `b`,
 `t`, `q`, `i`, `a`, `nb`, umbrella dùng cùng nguyên tắc.
 
 Nếu không có hateful target hoặc không đủ evidence để xác định scope và
-identity, trả `target=none`; entities rỗng, scope và mọi identity là none.
+identity, trả `target=none`, `scope={"label":"none","evidence":[]}`,
+`identity=[]`, và một lý do ngắn trong `reasoning`.
 Đây bao gồm yêu cầu abstain khi thiếu bằng chứng của bạn. Với dữ liệu gold,
 một trường hợp hate nhưng model không tìm được evidence có thể bị chấm sai
 vì model trả none; vẫn giữ prediction đó để đánh giá trung thực.
 
 Bằng chứng là quote nguyên văn, liên tục trong field gốc, giữ ngôn ngữ
-đầu vào. Parser kiểm tra quote tồn tại và entity/code/target nhất quán;
+đầu vào. Mỗi evidence có `field` và `quote`; khi cần nhiều trường, dùng
+nhiều evidence riêng và giải thích liên kết trong reasoning. Validator
+kiểm tra quote tồn tại và scope/identity/target nhất quán;
 việc quote đúng có thực sự chứng minh identity hay không vẫn cần đọc đánh
 giá về nghĩa, không được xem kiểm tra substring là bảo đảm semantic accuracy.
 
@@ -236,7 +238,7 @@ Không bổ sung mẫu từ raw, val/test hoặc nhãn hiếm không có trong t
 chỉ để tăng độ phủ. Bộ sáu mẫu hiện minh họa l/g/b/t/umbrella, chưa phủ
 mọi identity hoặc mọi tổ hợp nhãn.
 
-Text và target lấy nguyên từ train; các cặp entity–evidence được biên soạn
+Text và target lấy nguyên từ train; evidence và reasoning được biên soạn
 thủ công vì TSV không có gold evidence. Giữ nguyên gold giữa ba baseline;
 chỉ thay text được cung cấp và evidence có thể truy cập. Annotation có thể
 cần review về nghĩa, đặc biệt với identity denial hoặc multi-label.
@@ -261,9 +263,10 @@ Các bước trên server:
 4. Dựng chat messages bằng tokenizer chat template. Few-shot có các cặp
    user/assistant ví dụ trước query cuối.
 5. Generate evidence annotations và target cùng một response JSON.
-6. Validate schema, quote trong trường hiển thị và quan hệ entity–label;
-   ghi prediction aligned ID.
-7. Nếu có gold target, chấm metrics; nếu không có gold, ghi not_evaluated.
+6. Đọc riêng trường `target` để lấy prediction. Validate schema/evidence
+   độc lập và ghi `annotation_valid`, `annotation_error` để kiểm tra.
+7. Nếu có gold target, chỉ chấm nhãn `target`; lỗi evidence/schema không
+   loại một target hợp lệ. Nếu không có gold, ghi not_evaluated.
 
 Input budget mặc định 8.192 tokens và output budget 1.536 tokens vì output
 có bằng chứng, không chỉ một nhãn. Bạn chỉnh trong config. Không tự cắt

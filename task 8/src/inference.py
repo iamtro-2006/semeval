@@ -122,7 +122,7 @@ def make_messages(blocks, examples, row, language, variant):
 
 
 def validate_annotation(raw, row):
-    """Validate exact source quotes and entity/label consistency; never repair."""
+    """Check the compact annotation for diagnostics; target scoring is separate."""
     def unique_keys(pairs):
         obj = {}
         for key, value in pairs:
@@ -131,68 +131,52 @@ def validate_annotation(raw, row):
             obj[key] = value
         return obj
 
-    def evidence(items, comment_only=False):
+    def evidence(items):
         if not isinstance(items, list) or not items:
             raise ValueError('Evidence must be a non-empty list.')
         for item in items:
             if not isinstance(item, dict) or set(item) != {'field', 'quote'}:
                 raise ValueError('Evidence needs field and quote only.')
             field, quote = item['field'], item['quote']
-            if field not in TEXT_FIELDS or field not in row or (comment_only and field != 'yt_comment'):
+            if field not in TEXT_FIELDS or field not in row:
                 raise ValueError('Invalid evidence source field.')
             if not isinstance(quote, str) or not quote.strip() or quote not in row[field]:
                 raise ValueError('Evidence is not an exact source span.')
 
     try:
         obj = json.loads(raw.strip(), object_pairs_hook=unique_keys)
-        if not isinstance(obj, dict) or set(obj) != {'entities', 'scope', 'identities', 'target'}:
-            raise ValueError('Expected entities, scope, identities, target only.')
-        entities, scope, identities = obj['entities'], obj['scope'], obj['identities']
-        if not isinstance(entities, list):
-            raise ValueError('entities must be a list.')
-        if not isinstance(scope, dict) or set(scope) != {'label', 'pairs'}:
-            raise ValueError('scope needs label and pairs.')
-        if not isinstance(identities, dict) or set(identities) != set(IDENTITIES):
-            raise ValueError('All nine identity keys are required.')
+        if not isinstance(obj, dict) or set(obj) != {'scope', 'identity', 'target', 'reasoning'}:
+            raise ValueError('Expected scope, identity, target, reasoning only.')
+        scope, identities = obj['scope'], obj['identity']
+        if not isinstance(scope, dict) or set(scope) != {'label', 'evidence'}:
+            raise ValueError('scope needs label and evidence.')
+        if not isinstance(identities, list):
+            raise ValueError('identity must be a JSON array.')
+        if not isinstance(obj['reasoning'], str) or not obj['reasoning'].strip():
+            raise ValueError('reasoning must be a non-empty string.')
         if obj['target'] == 'none':
-            if entities or scope != {'label': 'none', 'pairs': 'none'} or any(v != 'none' for v in identities.values()):
-                raise ValueError('none requires empty entities and none scope/identities.')
+            if scope != {'label': 'none', 'evidence': []} or identities:
+                raise ValueError('none requires none scope with empty evidence and identity arrays.')
             return 'none', obj, ''
         parsed_scope, codes = parse_target(obj['target'])
-        names = set()
-        for entity in entities:
-            if not isinstance(entity, dict) or set(entity) != {'entity', 'reference_evidence', 'targeting_evidence'}:
-                raise ValueError('Invalid entity structure.')
-            name = entity['entity']
-            if not isinstance(name, str) or not name.strip() or name in names:
-                raise ValueError('Entity names must be non-empty and unique.')
-            names.add(name)
-            evidence(entity['reference_evidence'])
-            evidence(entity['targeting_evidence'], comment_only=True)
-        if not names or scope['label'] != parsed_scope:
-            raise ValueError('Target scope must agree with extracted entity scope.')
-
-        def pairs(items):
-            if not isinstance(items, list) or not items:
-                raise ValueError('Supported labels need non-empty entity/evidence pairs.')
-            paired = set()
-            for pair in items:
-                if not isinstance(pair, dict) or set(pair) != {'entity', 'evidence'}:
-                    raise ValueError('Pair needs entity and evidence.')
-                if pair['entity'] not in names:
-                    raise ValueError('Pair refers to an entity that was not extracted.')
-                paired.add(pair['entity'])
-                evidence(pair['evidence'])
-            return paired
-
-        scope_entities = pairs(scope['pairs'])
-        supported, identity_entities = set(), set()
-        for code, items in identities.items():
-            if items != 'none':
-                identity_entities.update(pairs(items))
-                supported.add(code)
-        if codes != supported or names != identity_entities or names != scope_entities:
-            raise ValueError('Entities, scope pairs, identity pairs and target must agree.')
+        if scope['label'] != parsed_scope:
+            raise ValueError('Target scope must agree with scope.label.')
+        evidence(scope['evidence'])
+        if not any(item['field'] == 'yt_comment' for item in scope['evidence']):
+            raise ValueError('scope evidence must include a quote from yt_comment.')
+        supported = []
+        for identity in identities:
+            if not isinstance(identity, dict) or set(identity) != {'label', 'evidence'}:
+                raise ValueError('Each identity needs label and evidence.')
+            code = identity['label']
+            if code not in IDENTITIES or code in supported:
+                raise ValueError('Identity labels must be supported codes without duplicates.')
+            evidence(identity['evidence'])
+            supported.append(code)
+        if set(supported) != codes:
+            raise ValueError('identity labels and target codes must agree.')
+        if supported != [code for code in IDENTITIES if code in codes]:
+            raise ValueError('identity labels need canonical order.')
         canonical = parsed_scope + '_' + ','.join(k for k in IDENTITIES if k in codes)
         if canonical != obj['target']:
             raise ValueError('Target needs canonical order without duplicates or spaces.')
@@ -208,6 +192,17 @@ def canonical_gold(value):
     return scope + '_' + ','.join(k for k in IDENTITIES if k in codes)
 
 
+def extract_target(raw):
+    """Read the predicted label independently of evidence/schema validation."""
+    try:
+        obj = json.loads(raw.strip())
+        if not isinstance(obj, dict) or 'target' not in obj:
+            raise ValueError('Output must be a JSON object with a target field.')
+        return canonical_gold(obj['target']), ''
+    except (ValueError, TypeError) as exc:
+        return '', str(exc)
+
+
 def evaluate(rows, predictions):
     if not all(r.get('target') for r in rows):
         return {'status': 'not_evaluated', 'reason': 'Gold target missing for one or more rows.', 'n': len(rows)}
@@ -220,7 +215,7 @@ def evaluate(rows, predictions):
         'false_positive_target_on_gold_none': sum(r['target'] == 'none' and p not in ('none', '') for r, p in zip(rows, predictions)),
         'task_c_on_gold_active': evaluate_targets([rows[i]['target'] for i in active],
                                                  [predictions[i] for i in active]) if active else None,
-        'note': 'Local metrics. Conditional Task C scores exclude gold=none. Literal evidence and consistency are checked; semantic evidence relevance still requires review.',
+        'note': 'Metrics score the target label only. Evidence/schema errors do not invalidate a valid target. Conditional Task C scores exclude gold=none.',
     }
 
 
@@ -304,7 +299,8 @@ def main():
     save_manifest()
     predictions = []
     columns = [ID_FIELD, 'language', 'input_variant', 'prompt_mode', 'gold', 'pred_target', 'valid', 'error',
-               'evidence_json', 'raw_output', 'input_tokens', 'output_tokens', 'latency_seconds']
+               'annotation_valid', 'annotation_error', 'evidence_json', 'raw_output',
+               'input_tokens', 'output_tokens', 'latency_seconds']
     try:
         with (output / 'predictions.tsv').open('w', encoding='utf-8', newline='') as stream:
             writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t')
@@ -316,8 +312,10 @@ def main():
                                                        return_dict=True, return_tensors='pt')
                 count = inputs['input_ids'].shape[1]
                 raw, target, annotation, error, elapsed, output_tokens = '', '', None, '', 0.0, 0
+                annotation_error = ''
                 if count > generation['max_input_tokens']:
                     error = 'Input exceeds configured budget; no text was truncated. Adjust config or prompt.'
+                    annotation_error = error
                 else:
                     inputs = inputs.to(model.get_input_embeddings().weight.device)
                     start = time.perf_counter()
@@ -327,11 +325,13 @@ def main():
                                                    pad_token_id=tokenizer.pad_token_id)[0, count:]
                     raw = tokenizer.decode(generated, skip_special_tokens=True)
                     elapsed, output_tokens = time.perf_counter() - start, len(generated)
-                    target, annotation, error = validate_annotation(raw, visible)
+                    target, error = extract_target(raw)
+                    _, annotation, annotation_error = validate_annotation(raw, visible)
                 predictions.append(target)
                 writer.writerow({ID_FIELD: row[ID_FIELD], 'language': data['language'],
                                  'input_variant': variant, 'prompt_mode': mode, 'gold': row.get('target', ''),
                                  'pred_target': target, 'valid': not bool(error), 'error': error,
+                                 'annotation_valid': not bool(annotation_error), 'annotation_error': annotation_error,
                                  'evidence_json': json.dumps(annotation, ensure_ascii=False) if annotation else '',
                                  'raw_output': raw, 'input_tokens': count, 'output_tokens': output_tokens,
                                  'latency_seconds': elapsed})
