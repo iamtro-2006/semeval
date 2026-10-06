@@ -230,6 +230,41 @@ def evaluate(rows, predictions):
     }
 
 
+def print_metrics(report):
+    """Display saved target metrics in compact tables for copying results."""
+    print(f'\nEvaluation: {report["n"]} samples')
+    if report['status'] != 'evaluated':
+        print(f'Not evaluated: {report["reason"]}')
+        return
+    print('Scores: 0 to 1. Only target labels are scored.')
+    print(f'{"Metric":<38} {"Score":>10}')
+    print(f'{"Full target exact match (all rows)":<38} {report["full_target_exact_match"]:>10.4f}')
+    print(f'{"Invalid target rate (all rows)":<38} {report["invalid_rate"]:>10.4f}')
+    print(f'Invalid targets: {report["invalid_count"]}/{report["n"]}')
+    print(f'False positive targets on gold=none: {report["false_positive_target_on_gold_none"]}')
+    task = report['task_c_on_gold_active']
+    if task is None:
+        print('Task C: no gold-active samples (all gold targets are none).')
+        return
+    print(f'\nTask C: {task["n"]} samples, excluding gold=none')
+    print(f'{"Metric":<38} {"Score":>10}')
+    for label, key in (
+        ('Identity Macro-F1 (gold support)', 'identity_macro_f1_gold_support'),
+        ('Identity Macro-F1 (fixed 9 labels)', 'identity_macro_f1_fixed_9'),
+        ('Identity Micro-F1', 'identity_micro_f1'),
+        ('Scope Macro-F1', 'scope_macro_f1'),
+        ('Scope accuracy', 'scope_accuracy'),
+        ('Target exact match', 'target_exact_match'),
+    ):
+        print(f'{label:<38} {task[key]:>10.4f}')
+    for title, key in (('Scope', 'scope_per_class'), ('Identity', 'identity_per_class')):
+        print(f'\n{title} per class (Task C)')
+        print(f'{"Label":<12} {"Precision":>10} {"Recall":>10} {"F1":>10} {"Support":>8}')
+        for label, values in task[key].items():
+            print(f'{label:<12} {values["precision"]:>10.4f} {values["recall"]:>10.4f} '
+                  f'{values["f1"]:>10.4f} {values["support"]:>8}')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='src/configs/inference.json')
@@ -350,14 +385,17 @@ def main():
                                  'raw_output': raw, 'input_tokens': count, 'output_tokens': output_tokens,
                                  'latency_seconds': elapsed})
                 stream.flush()
-        (output / 'metrics.json').write_text(json.dumps(evaluate(rows, predictions), ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        metrics = evaluate(rows, predictions)
+        (output / 'metrics.json').write_text(json.dumps(metrics, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         manifest['status'] = 'complete'
     except Exception as exc:
         manifest.update(status='failed', error=f'{type(exc).__name__}: {exc}')
         raise
     finally:
         save_manifest()
-    print(f'Output: {output}')
+    print(f'\nModel: {config["model_id"]} | Input: {variant} | Prompt: {mode} | Split: {data["split"]}')
+    print_metrics(metrics)
+    print(f'\nOutput: {output}')
 
 
 if __name__ == '__main__':
