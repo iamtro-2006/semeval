@@ -42,18 +42,20 @@ biểu ủng hộ equality, gold `none`. Vì vậy nhắc identity không đủ 
 
 ## 2. Phạm vi triển khai
 
-Dùng trực tiếp **train/dev/test TSV**. Theo yêu cầu bổ sung của bạn, đã
-tạm chia raw EN vào `data/split/en`: train 2.391, dev 299, test 299 (80/10/10).
-Đây là local split tạm thời, không phải official dev/test; có thể thay bằng
-các split chính thức sau này. Inference không tự chia lại dữ liệu. Config
-chứa đường dẫn của cả ba file; `data.split` quyết định file được chạy.
+Dùng trực tiếp **train/val/test TSV mới (v4)** trong `data/split/en`:
+train 1.107, val 316, test 159 (gần 70/20/10). Chỉ giữ các dòng
+`hate_speech=yes_explicit` hoặc `yes_implicit`; cả ba split không có
+gold `target=none`. Train có 861 group và 246 individual.
 
-Split tạm giữ nguyên nhóm title+description và normalized comment trùng,
-đồng thời tối ưu cân bằng scope, identity và target labels. Hai identity
-`i` (14 mẫu trong một nhóm video) và `a` (1 mẫu) giữ trong train; dev/test
-không thể đánh giá chúng độc lập mà vẫn giữ ranh giới video. Distribution
-table/charts nằm trong `outputs/en_split`; manifests ghi phương pháp,
-seed=42, source hash và kiểm tra không giao ID/video proxy/comment.
+Đây là split local từ raw training, không phải official dev/test. V4 chia
+theo toàn bộ chuỗi target với seed=42; nhãn chỉ có một mẫu được đưa vào
+test. V4 không giữ nguyên nhóm video, nên video có thể xuất hiện ở nhiều
+split. Mô tả dữ liệu hiện tại nằm trong `data/split/data_overview_v4.md`;
+chart cũ trong `outputs/en_split` mô tả split trước, không phải v4.
+
+Inference không tự chia lại dữ liệu. Config chứa đường dẫn ba file mới;
+`data.split=dev` ánh xạ tới `StereoQueerEval_EN_val.tsv`. Các demo được
+chọn từ train sao cho không giao ID/video proxy/comment với val/test.
 
 Không cài packages, load model hoặc chạy smoke test trên máy hiện tại.
 Code và tài liệu được chuẩn bị để bạn cài và chạy trên server. Chưa có
@@ -74,10 +76,10 @@ task 8/
   ACRONYMS.md.txt
   data/
     raw/                          # tài liệu dữ liệu gốc
-    split/en/                     # split EN tạm; có thể thay file chính thức
-      train.tsv
-      dev.tsv
-      test.tsv
+    split/en/                     # v4: chỉ các mẫu hate speech
+      StereoQueerEval_EN_train.tsv
+      StereoQueerEval_EN_val.tsv   # data.split=dev
+      StereoQueerEval_EN_test.tsv
   src/
     configs/inference.json
     prompts/
@@ -220,12 +222,19 @@ Few-shot hiện dùng cùng sáu mẫu từ **train EN hiện tại** cho cả b
 
 | Source ID | Gold target | Vai trò minh họa |
 |---|---|---|
-| training_EN_1057 | none | Ủng hộ cộng đồng, không suy hate từ identity mention |
-| training_EN_1226 | individual_l | Một người; chỉ baseline đầy đủ mới gọi tên Barbara Johnson từ description |
-| training_EN_0396 | group_t | Identity denial đối với trans women |
-| training_EN_0003 | group_l,g | Comment khái quát về homosexual people |
+| training_EN_1613 | individual_b | Clive Davis; phủ nhận bisexual identity của một người cụ thể |
+| training_EN_1811 | group_l,g | Khái quát và phủ nhận tính hợp lệ của gay marriages |
+| training_EN_2450 | individual_t | Một trans woman; title liên kết tới chị/em gái Patricia Arquette, description xác định Alexis Arquette |
 | training_EN_1776 | group_lgbtqia+ | Target là cộng đồng umbrella |
-| training_EN_0428 | group_t,nb | Multi-label theo annotation hiện có của train |
+| training_EN_1119 | group_b | Phủ nhận bisexual identity của men như một nhóm |
+| training_EN_1001 | individual_g | Varadkar; chỉ baseline có description mới dùng tên đầy đủ Leo Varadkar |
+
+Sáu demo gồm ba individual và ba group, cùng source IDs và gold labels
+trên cả ba baseline. Không có ví dụ none vì train v4 không chứa nhãn đó;
+giữ quy tắc none cho trường hợp thiếu bằng chứng trong input hiển thị.
+Không bổ sung mẫu từ raw, val/test hoặc nhãn hiếm không có trong train
+chỉ để tăng độ phủ. Bộ sáu mẫu hiện minh họa l/g/b/t/umbrella, chưa phủ
+mọi identity hoặc mọi tổ hợp nhãn.
 
 Text và target lấy nguyên từ train; các cặp entity–evidence được biên soạn
 thủ công vì TSV không có gold evidence. Giữ nguyên gold giữa ba baseline;
@@ -272,6 +281,8 @@ false-positive target trên gold none, và bộ `src/metrics.py` trên gold có
 target. Bộ metrics sẵn có không chấm gold none nên phần này được gọi rõ là
 conditional Task C report, không gọi là toàn bộ full-target score. Không có
 gold evidence trong TSV hiện tại nên chưa tính F1 cho evidence extraction.
+Với v4, mọi gold đều có target, nên toàn bộ tập đang chạy cũng là tập
+gold-active; điểm số không đánh giá việc phân biệt hate và non-hate.
 
 ## 8. Trình tự nghiên cứu
 

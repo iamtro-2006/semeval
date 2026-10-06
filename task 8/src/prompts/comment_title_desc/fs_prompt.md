@@ -21,7 +21,7 @@ Evidence must be a short, exact, contiguous quote from its declared field, witho
 
 If there is no hateful target, or the visible input does not support both scope and identity, output target="none". Missing context is not permission to guess. Return entities=[], scope={"label":"none","pairs":"none"}, and "none" for all nine identities in that case.
 
-The preceding user/assistant pairs are labeled examples from the training split. Follow their evidence-to-label structure. Each demonstration uses the same visible fields as this query. Do not copy a label without evidence in the new input.
+The user/assistant pairs are labeled examples from the training split. Follow their evidence-to-label structure. Each demonstration uses the same visible fields as this query. The examples do not restrict the valid target labels. Decide each query independently using its visible evidence, and return "none" when the none criteria above apply.
 
 Return exactly one JSON object with four keys in this order: entities, scope, identities, target. No markdown or prose.
 - entities: a list of {"entity":"target description","reference_evidence":[{"field":"allowed field","quote":"exact reference"}],"targeting_evidence":[{"field":"yt_comment","quote":"exact targeting"}]}.
@@ -33,59 +33,27 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
 ```examples
 [
   {
-    "source_id": "training_EN_1057",
+    "source_id": "training_EN_1613",
     "source_split": "train",
     "input": {
-      "yt_comment": "I support LGBT community 🏳️‍🌈🏳️‍🌈🏳️‍🌈🏳️‍🌈🏳️‍🌈",
-      "yt_title": "Cuba’s first LGBTQ hotels - [CHANNEL]",
-      "yt_description": "The Rainbow Hotel, described as Cuba's first LGBTQ hotel, reopened in December following Covid restrictions. \n\nWhile guests enjoyed the five-star service by the pool or a walk along the pristine sands, Cuba has not always been so welcoming to the gay community.\n\nIn the early part of communist leader Fidel Castro's rule, homosexual men and women were sent to work camps for supposed \"re-education\".\n\nAttitudes on the island have markedly improved since then but outside of tourist hotels the Cuban government has clamped down on recent protests and some LGBTQ activists say that the hotel is an attempt by the state to mask its poor human rights record.\n\nPlease subscribe HERE [URL]\n\n#Cuba #[CHANNEL]"
-    },
-    "output": {
-      "entities": [],
-      "scope": {
-        "label": "none",
-        "pairs": "none"
-      },
-      "identities": {
-        "l": "none",
-        "g": "none",
-        "b": "none",
-        "t": "none",
-        "q": "none",
-        "i": "none",
-        "a": "none",
-        "nb": "none",
-        "lgbtqia+": "none"
-      },
-      "target": "none"
-    }
-  },
-  {
-    "source_id": "training_EN_1226",
-    "source_split": "train",
-    "input": {
-      "yt_comment": "she gonna burn in hell cause shes lesbian",
-      "yt_title": "[CHANNEL]: Lesbian denied communion at funeral",
-      "yt_description": "[CHANNEL] speaks to Barbara Johnson who says a priest denied her communion at her mom's funeral because she is a lesbian."
+      "yt_comment": "Clive Davis is old as fuck he's not bisexual, He's senile , what the hell is he gonna do with a man ? Back in the closet Clive",
+      "yt_title": "Davis: 'Bisexuality does exist'",
+      "yt_description": "Clive Davis opens up to [CHANNEL]'s PIers Morgan about his past marriages and his recent coming out as bisexual. For more [CHANNEL] videos, visit our site at [URL]"
     },
     "output": {
       "entities": [
         {
-          "entity": "Barbara Johnson",
+          "entity": "Clive Davis",
           "reference_evidence": [
             {
               "field": "yt_comment",
-              "quote": "she"
-            },
-            {
-              "field": "yt_description",
-              "quote": "Barbara Johnson"
+              "quote": "Clive Davis"
             }
           ],
           "targeting_evidence": [
             {
               "field": "yt_comment",
-              "quote": "burn in hell cause shes lesbian"
+              "quote": "he's not bisexual, He's senile"
             }
           ]
         }
@@ -94,75 +62,11 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "label": "individual",
         "pairs": [
           {
-            "entity": "Barbara Johnson",
+            "entity": "Clive Davis",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "she gonna burn in hell"
-              }
-            ]
-          }
-        ]
-      },
-      "identities": {
-        "l": [
-          {
-            "entity": "Barbara Johnson",
-            "evidence": [
-              {
-                "field": "yt_description",
-                "quote": "because she is a lesbian"
-              }
-            ]
-          }
-        ],
-        "g": "none",
-        "b": "none",
-        "t": "none",
-        "q": "none",
-        "i": "none",
-        "a": "none",
-        "nb": "none",
-        "lgbtqia+": "none"
-      },
-      "target": "individual_l"
-    }
-  },
-  {
-    "source_id": "training_EN_0396",
-    "source_split": "train",
-    "input": {
-      "yt_comment": "trans women are men end of story.",
-      "yt_title": "SE Cupp: Dawn Staley's position on Trans athletes is red meat for the right",
-      "yt_description": "SE Cupp responds to South Carolina women’s basketball coach Dawn Staley being criticized by the GOP for saying transgender athletes should be allowed to compete in women’s sports. #[CHANNEL] #News"
-    },
-    "output": {
-      "entities": [
-        {
-          "entity": "trans women",
-          "reference_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "trans women"
-            }
-          ],
-          "targeting_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "trans women are men end of story."
-            }
-          ]
-        }
-      ],
-      "scope": {
-        "label": "group",
-        "pairs": [
-          {
-            "entity": "trans women",
-            "evidence": [
-              {
-                "field": "yt_comment",
-                "quote": "trans women"
+                "quote": "Clive Davis"
               }
             ]
           }
@@ -171,49 +75,49 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
       "identities": {
         "l": "none",
         "g": "none",
-        "b": "none",
-        "t": [
+        "b": [
           {
-            "entity": "trans women",
+            "entity": "Clive Davis",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "trans women"
+                "quote": "he's not bisexual"
               }
             ]
           }
         ],
+        "t": "none",
         "q": "none",
         "i": "none",
         "a": "none",
         "nb": "none",
         "lgbtqia+": "none"
       },
-      "target": "group_t"
+      "target": "individual_b"
     }
   },
   {
-    "source_id": "training_EN_0003",
+    "source_id": "training_EN_1811",
     "source_split": "train",
     "input": {
-      "yt_comment": "We all need Jesus, He said no homosexual shall inherit the Kingdom of God. The afterlife is real and I experienced it and Jesus really is God.",
-      "yt_title": "Kevin Smith defends his gay brother",
-      "yt_description": "Kevin Smith supports gay rights, and defends his brother: \"Stay out of my brother's bedroom, buddy...He's a good dude!\""
+      "yt_comment": "All gay marriages are fake. Marriage is only possible between a man and a woman.",
+      "yt_title": "Fake gay marriages exposed in London by undercover investigation - [CHANNEL]",
+      "yt_description": "Subscribe to [CHANNEL] www.youtube.com/[CHANNEL]\nAn increasing number of weddings taking place in London are shams designed to get around immigration laws and enable foreigners to live permanently in the UK. Despite clampdowns by the government, these fake weddings have more than trebled in number in recent years. [CHANNEL] Inside Out reveals how the situation could worsen as gangs are organising bogus gay weddings for illegal immigrants.\n\nSubscribe to [CHANNEL] HERE [URL]\nCheck out our website: [URL] \nFacebook: [URL] \nTwitter: [URL]\nInstagram: [URL]"
     },
     "output": {
       "entities": [
         {
-          "entity": "homosexual people",
+          "entity": "gay couples",
           "reference_evidence": [
             {
               "field": "yt_comment",
-              "quote": "no homosexual"
+              "quote": "All gay marriages"
             }
           ],
           "targeting_evidence": [
             {
               "field": "yt_comment",
-              "quote": "no homosexual shall inherit the Kingdom of God"
+              "quote": "All gay marriages are fake. Marriage is only possible between a man and a woman."
             }
           ]
         }
@@ -222,11 +126,11 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "label": "group",
         "pairs": [
           {
-            "entity": "homosexual people",
+            "entity": "gay couples",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "no homosexual"
+                "quote": "All gay marriages"
               }
             ]
           }
@@ -235,22 +139,22 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
       "identities": {
         "l": [
           {
-            "entity": "homosexual people",
+            "entity": "gay couples",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "no homosexual"
+                "quote": "gay marriages"
               }
             ]
           }
         ],
         "g": [
           {
-            "entity": "homosexual people",
+            "entity": "gay couples",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "no homosexual"
+                "quote": "gay marriages"
               }
             ]
           }
@@ -264,6 +168,74 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "lgbtqia+": "none"
       },
       "target": "group_l,g"
+    }
+  },
+  {
+    "source_id": "training_EN_2450",
+    "source_split": "train",
+    "input": {
+      "yt_comment": "Transwoman my ass sex entertainment my ass. People in the porn industry are in it for the pay. Its all sex for pay. This video sucked",
+      "yt_title": "Patricia Arquette talks sister, transgender rights",
+      "yt_description": "Academy award winning actress and activist Patricia Arquette opens up to [CHANNEL]'s Poppy Harlow about her sister, Alexis Arquette, an actress and transgender activist. \"Alexis knew that she was kicking a door open,\" Arquette says."
+    },
+    "output": {
+      "entities": [
+        {
+          "entity": "Alexis Arquette",
+          "reference_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Transwoman"
+            },
+            {
+              "field": "yt_description",
+              "quote": "her sister, Alexis Arquette"
+            }
+          ],
+          "targeting_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Transwoman my ass"
+            }
+          ]
+        }
+      ],
+      "scope": {
+        "label": "individual",
+        "pairs": [
+          {
+            "entity": "Alexis Arquette",
+            "evidence": [
+              {
+                "field": "yt_comment",
+                "quote": "Transwoman"
+              }
+            ]
+          }
+        ]
+      },
+      "identities": {
+        "l": "none",
+        "g": "none",
+        "b": "none",
+        "t": [
+          {
+            "entity": "Alexis Arquette",
+            "evidence": [
+              {
+                "field": "yt_comment",
+                "quote": "Transwoman"
+              }
+            ]
+          }
+        ],
+        "q": "none",
+        "i": "none",
+        "a": "none",
+        "nb": "none",
+        "lgbtqia+": "none"
+      },
+      "target": "individual_t"
     }
   },
   {
@@ -331,42 +303,27 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
     }
   },
   {
-    "source_id": "training_EN_0428",
+    "source_id": "training_EN_1119",
     "source_split": "train",
     "input": {
-      "yt_comment": "Oh stop the nonsense!!! Really non binary is not and will never be transgender.",
-      "yt_title": "Gender beyond the binary",
-      "yt_description": "Five non-binary people discuss their experience of life liberated from restrictive gender norms and definitions. They tell us about the difficulty that society has with their resistance to its attempts to compartmentalise and define people\nSubscribe to [CHANNEL] on YouTube ► [URL]\n\n[CHANNEL] publishes independent journalism, made possible by supporters. Contribute to [CHANNEL] today ► [URL]\n\nSign up to [CHANNEL]'s free new daily newsletter, First Edition ► [URL]\n\nWebsite ► [URL]\nFacebook ► [URL]\nTwitter ► [URL]\nInstagram ► [URL]\n\n[CHANNEL] on YouTube: \n[CHANNEL] News ► [URL]\n[CHANNEL] Australia ► [URL]\n[CHANNEL] Football ► [URL]\n[CHANNEL] Sport ► [URL]\n[CHANNEL] Live ► [URL]\n\n#nonbinary #gender #pronouns #genderequality #genderideology #genders"
+      "yt_comment": "Women are bisexual by nature, but studies have shown men cannot ACTUALLY be bisexual, even if they claim to be. The study hooked up their genitals to see what aroused them, and the results showed bisexual men are one aroused by one sex, not both.",
+      "yt_title": "Davis: 'Bisexuality does exist'",
+      "yt_description": "Clive Davis opens up to [CHANNEL]'s PIers Morgan about his past marriages and his recent coming out as bisexual. For more [CHANNEL] videos, visit our site at [URL]"
     },
     "output": {
       "entities": [
         {
-          "entity": "non-binary people",
+          "entity": "bisexual men",
           "reference_evidence": [
             {
               "field": "yt_comment",
-              "quote": "non binary"
+              "quote": "bisexual men"
             }
           ],
           "targeting_evidence": [
             {
               "field": "yt_comment",
-              "quote": "Oh stop the nonsense!!!"
-            }
-          ]
-        },
-        {
-          "entity": "transgender people",
-          "reference_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "transgender"
-            }
-          ],
-          "targeting_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "Oh stop the nonsense!!!"
+              "quote": "men cannot ACTUALLY be bisexual, even if they claim to be"
             }
           ]
         }
@@ -375,20 +332,11 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "label": "group",
         "pairs": [
           {
-            "entity": "non-binary people",
+            "entity": "bisexual men",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "Really non binary is not and will never be transgender."
-              }
-            ]
-          },
-          {
-            "entity": "transgender people",
-            "evidence": [
-              {
-                "field": "yt_comment",
-                "quote": "Really non binary is not and will never be transgender."
+                "quote": "bisexual men"
               }
             ]
           }
@@ -397,35 +345,93 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
       "identities": {
         "l": "none",
         "g": "none",
-        "b": "none",
-        "t": [
+        "b": [
           {
-            "entity": "transgender people",
+            "entity": "bisexual men",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "transgender"
+                "quote": "bisexual men"
               }
             ]
           }
         ],
+        "t": "none",
         "q": "none",
         "i": "none",
         "a": "none",
-        "nb": [
+        "nb": "none",
+        "lgbtqia+": "none"
+      },
+      "target": "group_b"
+    }
+  },
+  {
+    "source_id": "training_EN_1001",
+    "source_split": "train",
+    "input": {
+      "yt_comment": "The gay Indian Varadkar has no authority to speak on the 26 Roman Catholic counties of the REPUBLIC of Ireland or indeed we British here in the United Kingdom of Great Britain and NORTHERN Ireland ❤🇬🇧❤️. A sodomite who partied in New York's gay clubs with his Doctor boyfriend whilst on official business representing the 26 Roman Catholic counties of the REPUBLIC of Ireland!! 🤮🤮🤮🤮👎👎👎💩💩💩💩💩",
+      "yt_title": "Ireland's former Prime Minister on Boris Johnson, Brexit and coming out | [CHANNEL] Newscast",
+      "yt_description": "Adam speaks to Leo Varadkar, former Taoiseach on Boris Johnson, Brexit and coming out. \n\nHe was the leader of Ireland during the pivotal Brexit negotiations. \n\nMr Varadkar became Ireland's youngest taoiseach at the age of 38 in 2017.\n\nHe had led the three-party coalition government in Dublin, along with Fianna Fáil and the Green Party.\n\nSubscribe here: [URL]\n\nFor more news, analysis and features visit: www.[CHANNEL].com/news \n\n#[CHANNEL]"
+    },
+    "output": {
+      "entities": [
+        {
+          "entity": "Leo Varadkar",
+          "reference_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "The gay Indian Varadkar"
+            },
+            {
+              "field": "yt_description",
+              "quote": "Leo Varadkar, former Taoiseach"
+            }
+          ],
+          "targeting_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "The gay Indian Varadkar has no authority to speak"
+            }
+          ]
+        }
+      ],
+      "scope": {
+        "label": "individual",
+        "pairs": [
           {
-            "entity": "non-binary people",
+            "entity": "Leo Varadkar",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "non binary"
+                "quote": "Varadkar"
+              }
+            ]
+          }
+        ]
+      },
+      "identities": {
+        "l": "none",
+        "g": [
+          {
+            "entity": "Leo Varadkar",
+            "evidence": [
+              {
+                "field": "yt_comment",
+                "quote": "gay Indian Varadkar"
               }
             ]
           }
         ],
+        "b": "none",
+        "t": "none",
+        "q": "none",
+        "i": "none",
+        "a": "none",
+        "nb": "none",
         "lgbtqia+": "none"
       },
-      "target": "group_t,nb"
+      "target": "individual_g"
     }
   }
 ]

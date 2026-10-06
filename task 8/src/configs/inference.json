@@ -13,9 +13,9 @@
     "language": "English",
     "split": "dev",
     "files": {
-      "train": "data/split/en/train.tsv",
-      "dev": "data/split/en/dev.tsv",
-      "test": "data/split/en/test.tsv"
+      "train": "data/split/en/StereoQueerEval_EN_train.tsv",
+      "dev": "data/split/en/StereoQueerEval_EN_val.tsv",
+      "test": "data/split/en/StereoQueerEval_EN_test.tsv"
     }
   },
   "prompt": {

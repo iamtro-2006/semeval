@@ -21,7 +21,7 @@ Evidence must be a short, exact, contiguous quote from its declared field, witho
 
 If there is no hateful target, or the visible input does not support both scope and identity, output target="none". Missing context is not permission to guess. Return entities=[], scope={"label":"none","pairs":"none"}, and "none" for all nine identities in that case.
 
-The preceding user/assistant pairs are labeled examples from the training split. Follow their evidence-to-label structure. Each demonstration uses the same visible fields as this query. Do not copy a label without evidence in the new input.
+The user/assistant pairs are labeled examples from the training split. Follow their evidence-to-label structure. Each demonstration uses the same visible fields as this query. The examples do not restrict the valid target labels. Decide each query independently using its visible evidence, and return "none" when the none criteria above apply.
 
 Return exactly one JSON object with four keys in this order: entities, scope, identities, target. No markdown or prose.
 - entities: a list of {"entity":"target description","reference_evidence":[{"field":"allowed field","quote":"exact reference"}],"targeting_evidence":[{"field":"yt_comment","quote":"exact targeting"}]}.
@@ -33,57 +33,26 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
 ```examples
 [
   {
-    "source_id": "training_EN_1057",
+    "source_id": "training_EN_1613",
     "source_split": "train",
     "input": {
-      "yt_comment": "I support LGBT community 🏳️‍🌈🏳️‍🌈🏳️‍🌈🏳️‍🌈🏳️‍🌈",
-      "yt_title": "Cuba’s first LGBTQ hotels - [CHANNEL]"
-    },
-    "output": {
-      "entities": [],
-      "scope": {
-        "label": "none",
-        "pairs": "none"
-      },
-      "identities": {
-        "l": "none",
-        "g": "none",
-        "b": "none",
-        "t": "none",
-        "q": "none",
-        "i": "none",
-        "a": "none",
-        "nb": "none",
-        "lgbtqia+": "none"
-      },
-      "target": "none"
-    }
-  },
-  {
-    "source_id": "training_EN_1226",
-    "source_split": "train",
-    "input": {
-      "yt_comment": "she gonna burn in hell cause shes lesbian",
-      "yt_title": "[CHANNEL]: Lesbian denied communion at funeral"
+      "yt_comment": "Clive Davis is old as fuck he's not bisexual, He's senile , what the hell is he gonna do with a man ? Back in the closet Clive",
+      "yt_title": "Davis: 'Bisexuality does exist'"
     },
     "output": {
       "entities": [
         {
-          "entity": "the woman referred to as she",
+          "entity": "Clive Davis",
           "reference_evidence": [
             {
               "field": "yt_comment",
-              "quote": "she"
-            },
-            {
-              "field": "yt_title",
-              "quote": "Lesbian denied communion at funeral"
+              "quote": "Clive Davis"
             }
           ],
           "targeting_evidence": [
             {
               "field": "yt_comment",
-              "quote": "burn in hell cause shes lesbian"
+              "quote": "he's not bisexual, He's senile"
             }
           ]
         }
@@ -92,74 +61,11 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "label": "individual",
         "pairs": [
           {
-            "entity": "the woman referred to as she",
+            "entity": "Clive Davis",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "she gonna burn in hell"
-              }
-            ]
-          }
-        ]
-      },
-      "identities": {
-        "l": [
-          {
-            "entity": "the woman referred to as she",
-            "evidence": [
-              {
-                "field": "yt_title",
-                "quote": "Lesbian"
-              }
-            ]
-          }
-        ],
-        "g": "none",
-        "b": "none",
-        "t": "none",
-        "q": "none",
-        "i": "none",
-        "a": "none",
-        "nb": "none",
-        "lgbtqia+": "none"
-      },
-      "target": "individual_l"
-    }
-  },
-  {
-    "source_id": "training_EN_0396",
-    "source_split": "train",
-    "input": {
-      "yt_comment": "trans women are men end of story.",
-      "yt_title": "SE Cupp: Dawn Staley's position on Trans athletes is red meat for the right"
-    },
-    "output": {
-      "entities": [
-        {
-          "entity": "trans women",
-          "reference_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "trans women"
-            }
-          ],
-          "targeting_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "trans women are men end of story."
-            }
-          ]
-        }
-      ],
-      "scope": {
-        "label": "group",
-        "pairs": [
-          {
-            "entity": "trans women",
-            "evidence": [
-              {
-                "field": "yt_comment",
-                "quote": "trans women"
+                "quote": "Clive Davis"
               }
             ]
           }
@@ -168,48 +74,48 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
       "identities": {
         "l": "none",
         "g": "none",
-        "b": "none",
-        "t": [
+        "b": [
           {
-            "entity": "trans women",
+            "entity": "Clive Davis",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "trans women"
+                "quote": "he's not bisexual"
               }
             ]
           }
         ],
+        "t": "none",
         "q": "none",
         "i": "none",
         "a": "none",
         "nb": "none",
         "lgbtqia+": "none"
       },
-      "target": "group_t"
+      "target": "individual_b"
     }
   },
   {
-    "source_id": "training_EN_0003",
+    "source_id": "training_EN_1811",
     "source_split": "train",
     "input": {
-      "yt_comment": "We all need Jesus, He said no homosexual shall inherit the Kingdom of God. The afterlife is real and I experienced it and Jesus really is God.",
-      "yt_title": "Kevin Smith defends his gay brother"
+      "yt_comment": "All gay marriages are fake. Marriage is only possible between a man and a woman.",
+      "yt_title": "Fake gay marriages exposed in London by undercover investigation - [CHANNEL]"
     },
     "output": {
       "entities": [
         {
-          "entity": "homosexual people",
+          "entity": "gay couples",
           "reference_evidence": [
             {
               "field": "yt_comment",
-              "quote": "no homosexual"
+              "quote": "All gay marriages"
             }
           ],
           "targeting_evidence": [
             {
               "field": "yt_comment",
-              "quote": "no homosexual shall inherit the Kingdom of God"
+              "quote": "All gay marriages are fake. Marriage is only possible between a man and a woman."
             }
           ]
         }
@@ -218,11 +124,11 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "label": "group",
         "pairs": [
           {
-            "entity": "homosexual people",
+            "entity": "gay couples",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "no homosexual"
+                "quote": "All gay marriages"
               }
             ]
           }
@@ -231,22 +137,22 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
       "identities": {
         "l": [
           {
-            "entity": "homosexual people",
+            "entity": "gay couples",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "no homosexual"
+                "quote": "gay marriages"
               }
             ]
           }
         ],
         "g": [
           {
-            "entity": "homosexual people",
+            "entity": "gay couples",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "no homosexual"
+                "quote": "gay marriages"
               }
             ]
           }
@@ -260,6 +166,73 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "lgbtqia+": "none"
       },
       "target": "group_l,g"
+    }
+  },
+  {
+    "source_id": "training_EN_2450",
+    "source_split": "train",
+    "input": {
+      "yt_comment": "Transwoman my ass sex entertainment my ass. People in the porn industry are in it for the pay. Its all sex for pay. This video sucked",
+      "yt_title": "Patricia Arquette talks sister, transgender rights"
+    },
+    "output": {
+      "entities": [
+        {
+          "entity": "Patricia Arquette's sister",
+          "reference_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Transwoman"
+            },
+            {
+              "field": "yt_title",
+              "quote": "Patricia Arquette talks sister, transgender rights"
+            }
+          ],
+          "targeting_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Transwoman my ass"
+            }
+          ]
+        }
+      ],
+      "scope": {
+        "label": "individual",
+        "pairs": [
+          {
+            "entity": "Patricia Arquette's sister",
+            "evidence": [
+              {
+                "field": "yt_comment",
+                "quote": "Transwoman"
+              }
+            ]
+          }
+        ]
+      },
+      "identities": {
+        "l": "none",
+        "g": "none",
+        "b": "none",
+        "t": [
+          {
+            "entity": "Patricia Arquette's sister",
+            "evidence": [
+              {
+                "field": "yt_comment",
+                "quote": "Transwoman"
+              }
+            ]
+          }
+        ],
+        "q": "none",
+        "i": "none",
+        "a": "none",
+        "nb": "none",
+        "lgbtqia+": "none"
+      },
+      "target": "individual_t"
     }
   },
   {
@@ -326,41 +299,26 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
     }
   },
   {
-    "source_id": "training_EN_0428",
+    "source_id": "training_EN_1119",
     "source_split": "train",
     "input": {
-      "yt_comment": "Oh stop the nonsense!!! Really non binary is not and will never be transgender.",
-      "yt_title": "Gender beyond the binary"
+      "yt_comment": "Women are bisexual by nature, but studies have shown men cannot ACTUALLY be bisexual, even if they claim to be. The study hooked up their genitals to see what aroused them, and the results showed bisexual men are one aroused by one sex, not both.",
+      "yt_title": "Davis: 'Bisexuality does exist'"
     },
     "output": {
       "entities": [
         {
-          "entity": "non-binary people",
+          "entity": "bisexual men",
           "reference_evidence": [
             {
               "field": "yt_comment",
-              "quote": "non binary"
+              "quote": "bisexual men"
             }
           ],
           "targeting_evidence": [
             {
               "field": "yt_comment",
-              "quote": "Oh stop the nonsense!!!"
-            }
-          ]
-        },
-        {
-          "entity": "transgender people",
-          "reference_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "transgender"
-            }
-          ],
-          "targeting_evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "Oh stop the nonsense!!!"
+              "quote": "men cannot ACTUALLY be bisexual, even if they claim to be"
             }
           ]
         }
@@ -369,20 +327,11 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
         "label": "group",
         "pairs": [
           {
-            "entity": "non-binary people",
+            "entity": "bisexual men",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "Really non binary is not and will never be transgender."
-              }
-            ]
-          },
-          {
-            "entity": "transgender people",
-            "evidence": [
-              {
-                "field": "yt_comment",
-                "quote": "Really non binary is not and will never be transgender."
+                "quote": "bisexual men"
               }
             ]
           }
@@ -391,35 +340,88 @@ Return exactly one JSON object with four keys in this order: entities, scope, id
       "identities": {
         "l": "none",
         "g": "none",
-        "b": "none",
-        "t": [
+        "b": [
           {
-            "entity": "transgender people",
+            "entity": "bisexual men",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "transgender"
+                "quote": "bisexual men"
               }
             ]
           }
         ],
+        "t": "none",
         "q": "none",
         "i": "none",
         "a": "none",
-        "nb": [
+        "nb": "none",
+        "lgbtqia+": "none"
+      },
+      "target": "group_b"
+    }
+  },
+  {
+    "source_id": "training_EN_1001",
+    "source_split": "train",
+    "input": {
+      "yt_comment": "The gay Indian Varadkar has no authority to speak on the 26 Roman Catholic counties of the REPUBLIC of Ireland or indeed we British here in the United Kingdom of Great Britain and NORTHERN Ireland ❤🇬🇧❤️. A sodomite who partied in New York's gay clubs with his Doctor boyfriend whilst on official business representing the 26 Roman Catholic counties of the REPUBLIC of Ireland!! 🤮🤮🤮🤮👎👎👎💩💩💩💩💩",
+      "yt_title": "Ireland's former Prime Minister on Boris Johnson, Brexit and coming out | [CHANNEL] Newscast"
+    },
+    "output": {
+      "entities": [
+        {
+          "entity": "Varadkar",
+          "reference_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "The gay Indian Varadkar"
+            }
+          ],
+          "targeting_evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "The gay Indian Varadkar has no authority to speak"
+            }
+          ]
+        }
+      ],
+      "scope": {
+        "label": "individual",
+        "pairs": [
           {
-            "entity": "non-binary people",
+            "entity": "Varadkar",
             "evidence": [
               {
                 "field": "yt_comment",
-                "quote": "non binary"
+                "quote": "Varadkar"
+              }
+            ]
+          }
+        ]
+      },
+      "identities": {
+        "l": "none",
+        "g": [
+          {
+            "entity": "Varadkar",
+            "evidence": [
+              {
+                "field": "yt_comment",
+                "quote": "gay Indian Varadkar"
               }
             ]
           }
         ],
+        "b": "none",
+        "t": "none",
+        "q": "none",
+        "i": "none",
+        "a": "none",
+        "nb": "none",
         "lgbtqia+": "none"
       },
-      "target": "group_t,nb"
+      "target": "individual_g"
     }
   }
 ]
