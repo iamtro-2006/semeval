@@ -257,6 +257,7 @@ def main():
         validate_demonstrations(examples, read_tsv(train_path), rows, variant)
 
     import torch
+    from tqdm import tqdm
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     random.seed(config['generation']['seed'])
@@ -302,10 +303,12 @@ def main():
                'annotation_valid', 'annotation_error', 'evidence_json', 'raw_output',
                'input_tokens', 'output_tokens', 'latency_seconds']
     try:
-        with (output / 'predictions.tsv').open('w', encoding='utf-8', newline='') as stream:
+        with (output / 'predictions.tsv').open('w', encoding='utf-8', newline='') as stream, \
+                tqdm(rows, desc=f'Inference {data["split"]}', unit='sample',
+                     dynamic_ncols=True, miniters=1) as progress:
             writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t')
             writer.writeheader()
-            for index, row in enumerate(rows):
+            for row in progress:
                 visible = visible_input(row, variant)
                 messages = make_messages(blocks, examples, visible, data['language'], variant)
                 inputs = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
@@ -336,8 +339,6 @@ def main():
                                  'raw_output': raw, 'input_tokens': count, 'output_tokens': output_tokens,
                                  'latency_seconds': elapsed})
                 stream.flush()
-                if (index + 1) % 25 == 0:
-                    print(f'Annotated {index + 1}/{len(rows)}', flush=True)
         (output / 'metrics.json').write_text(json.dumps(evaluate(rows, predictions), ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         manifest['status'] = 'complete'
     except Exception as exc:
