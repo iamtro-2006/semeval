@@ -66,12 +66,12 @@ Before returning, check the four keys, quote accuracy, identity order, and agree
     }
   },
   {
-    "source_id": "training_EN_1811",
+    "source_id": "training_EN_1776",
     "source_split": "train",
     "input": {
-      "yt_comment": "All gay marriages are fake. Marriage is only possible between a man and a woman.",
-      "yt_title": "Fake gay marriages exposed in London by undercover investigation - [CHANNEL]",
-      "yt_description": "Subscribe to [CHANNEL] www.youtube.com/[CHANNEL]\nAn increasing number of weddings taking place in London are shams designed to get around immigration laws and enable foreigners to live permanently in the UK. Despite clampdowns by the government, these fake weddings have more than trebled in number in recent years. [CHANNEL] Inside Out reveals how the situation could worsen as gangs are organising bogus gay weddings for illegal immigrants.\n\nSubscribe to [CHANNEL] HERE [URL]\nCheck out our website: [URL] \nFacebook: [URL] \nTwitter: [URL]\nInstagram: [URL]"
+      "yt_comment": "I feel I wouldn't have minded if the lgbtq community wasn't full of cunts :)",
+      "yt_title": "Kirk Cameron says 'Homosexuality is unnatural'",
+      "yt_description": "Kirk Cameron believes homosexuality is unnatural, detrimental and ultimately destructive to foundations of civilization."
     },
     "output": {
       "scope": {
@@ -79,32 +79,23 @@ Before returning, check the four keys, quote accuracy, identity order, and agree
         "evidence": [
           {
             "field": "yt_comment",
-            "quote": "All gay marriages are fake."
+            "quote": "the lgbtq community wasn't full of cunts"
           }
         ]
       },
       "identity": [
         {
-          "label": "l",
+          "label": "lgbtqia+",
           "evidence": [
             {
               "field": "yt_comment",
-              "quote": "gay marriages"
-            }
-          ]
-        },
-        {
-          "label": "g",
-          "evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "gay marriages"
+              "quote": "the lgbtq community"
             }
           ]
         }
       ],
-      "target": "group_l,g",
-      "reasoning": "The comment rejects same-sex marriages in general, targeting lesbian and gay couples rather than a specific couple."
+      "target": "group_lgbtqia+",
+      "reasoning": "The insult generalizes to the LGBTQ community as a whole, without singling out individual identity categories."
     }
   },
   {
@@ -153,12 +144,12 @@ Before returning, check the four keys, quote accuracy, identity order, and agree
     }
   },
   {
-    "source_id": "training_EN_1776",
+    "source_id": "training_EN_1867",
     "source_split": "train",
     "input": {
-      "yt_comment": "I feel I wouldn't have minded if the lgbtq community wasn't full of cunts :)",
-      "yt_title": "Kirk Cameron says 'Homosexuality is unnatural'",
-      "yt_description": "Kirk Cameron believes homosexuality is unnatural, detrimental and ultimately destructive to foundations of civilization."
+      "yt_comment": "I am planning to marry my dog and start a family, you are all invited",
+      "yt_title": "Vatican: Gays, lesbians must be respected",
+      "yt_description": "The Vatican said that gays and lesbians must be treated with respect and their children may be baptized in the church. More from [CHANNEL] at [URL]\n\nTo license this and other [CHANNEL]/HLN content, visit [URL] or e-mail [EMAIL]."
     },
     "output": {
       "scope": {
@@ -166,94 +157,185 @@ Before returning, check the four keys, quote accuracy, identity order, and agree
         "evidence": [
           {
             "field": "yt_comment",
-            "quote": "the lgbtq community wasn't full of cunts"
-          }
-        ]
-      },
-      "identity": [
-        {
-          "label": "lgbtqia+",
-          "evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "the lgbtq community"
-            }
-          ]
-        }
-      ],
-      "target": "group_lgbtqia+",
-      "reasoning": "The insult generalizes to the LGBTQ community as a whole, without singling out individual identity categories."
-    }
-  },
-  {
-    "source_id": "training_EN_1119",
-    "source_split": "train",
-    "input": {
-      "yt_comment": "Women are bisexual by nature, but studies have shown men cannot ACTUALLY be bisexual, even if they claim to be. The study hooked up their genitals to see what aroused them, and the results showed bisexual men are one aroused by one sex, not both.",
-      "yt_title": "Davis: 'Bisexuality does exist'",
-      "yt_description": "Clive Davis opens up to [CHANNEL]'s PIers Morgan about his past marriages and his recent coming out as bisexual. For more [CHANNEL] videos, visit our site at [URL]"
-    },
-    "output": {
-      "scope": {
-        "label": "group",
-        "evidence": [
+            "quote": "I am planning to marry my dog and start a family"
+          },
           {
-            "field": "yt_comment",
-            "quote": "men cannot ACTUALLY be bisexual, even if they claim to be"
-          }
-        ]
-      },
-      "identity": [
-        {
-          "label": "b",
-          "evidence": [
-            {
-              "field": "yt_comment",
-              "quote": "bisexual men"
-            }
-          ]
-        }
-      ],
-      "target": "group_b",
-      "reasoning": "The comment denies bisexual identity for men as a group, rather than targeting the person discussed in the video."
-    }
-  },
-  {
-    "source_id": "training_EN_1001",
-    "source_split": "train",
-    "input": {
-      "yt_comment": "The gay Indian Varadkar has no authority to speak on the 26 Roman Catholic counties of the REPUBLIC of Ireland or indeed we British here in the United Kingdom of Great Britain and NORTHERN Ireland ❤🇬🇧❤️. A sodomite who partied in New York's gay clubs with his Doctor boyfriend whilst on official business representing the 26 Roman Catholic counties of the REPUBLIC of Ireland!! 🤮🤮🤮🤮👎👎👎💩💩💩💩💩",
-      "yt_title": "Ireland's former Prime Minister on Boris Johnson, Brexit and coming out | [CHANNEL] Newscast",
-      "yt_description": "Adam speaks to Leo Varadkar, former Taoiseach on Boris Johnson, Brexit and coming out. \n\nHe was the leader of Ireland during the pivotal Brexit negotiations. \n\nMr Varadkar became Ireland's youngest taoiseach at the age of 38 in 2017.\n\nHe had led the three-party coalition government in Dublin, along with Fianna Fáil and the Green Party.\n\nSubscribe here: [URL]\n\nFor more news, analysis and features visit: www.[CHANNEL].com/news \n\n#[CHANNEL]"
-    },
-    "output": {
-      "scope": {
-        "label": "individual",
-        "evidence": [
-          {
-            "field": "yt_comment",
-            "quote": "The gay Indian Varadkar has no authority to speak"
+            "field": "yt_title",
+            "quote": "Gays, lesbians must be respected"
           },
           {
             "field": "yt_description",
-            "quote": "Leo Varadkar, former Taoiseach"
+            "quote": "gays and lesbians must be treated with respect and their children may be baptized"
           }
         ]
       },
       "identity": [
+        {
+          "label": "l",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "marry my dog"
+            },
+            {
+              "field": "yt_title",
+              "quote": "lesbians"
+            }
+          ]
+        },
         {
           "label": "g",
           "evidence": [
             {
               "field": "yt_comment",
-              "quote": "gay Indian Varadkar"
+              "quote": "marry my dog"
+            },
+            {
+              "field": "yt_title",
+              "quote": "Gays"
             }
           ]
         }
       ],
-      "target": "individual_g",
-      "reasoning": "The comment discredits Varadkar using his gay identity; the description identifies this individual as Leo Varadkar."
+      "target": "group_l,g",
+      "reasoning": "The comment mocks gay and lesbian families through a dog-marriage analogy, linked by the title and description to respect for those groups and their children."
     }
+  },
+  {
+    "source_id": "training_EN_0460",
+    "source_split": "train",
+    "input": {
+      "yt_comment": "I have known a number of people who engage in gay/ lesbian behaviors because of childhood sexual abuse. These individuals are afraid of forming loving attachments with the opposite gender because of what has happened to them. A good number of people are also merely experimenting with their sexuality. I take serious issue that all gay and lesbian behavior is innate.  Labeling oneself as gay or lesbian seems to be a status symbol or a mark of achievement nowadays. Get over yourselves people!",
+      "yt_title": "Proud to be 'Born This Way'",
+      "yt_description": "A blog featuring the childhood photos of gay and lesbian men and women seeks to inspire and encourage struggling youth."
+    },
+    "output": {
+      "scope": {
+        "label": "group",
+        "evidence": [
+          {
+            "field": "yt_comment",
+            "quote": "all gay and lesbian behavior is innate"
+          },
+          {
+            "field": "yt_comment",
+            "quote": "Get over yourselves people!"
+          }
+        ]
+      },
+      "identity": [
+        {
+          "label": "l",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "gay/ lesbian behaviors"
+            }
+          ]
+        },
+        {
+          "label": "g",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "gay/ lesbian behaviors"
+            }
+          ]
+        },
+        {
+          "label": "lgbtqia+",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Labeling oneself as gay or lesbian seems to be a status symbol or a mark of achievement nowadays."
+            },
+            {
+              "field": "yt_comment",
+              "quote": "Get over yourselves people!"
+            },
+            {
+              "field": "yt_description",
+              "quote": "gay and lesbian men and women seeks to inspire and encourage struggling youth"
+            }
+          ]
+        }
+      ],
+      "target": "group_l,g,lgbtqia+",
+      "reasoning": "The comment attacks gay and lesbian identities and the wider identity-affirming community; the description links that general dismissal to an initiative encouraging gay and lesbian youth."
+    }
+  },
+  {
+    "source_id": "training_EN_0991",
+    "source_split": "train",
+    "input": {
+      "yt_comment": "satan, also called the adversary or the devil, is the enemy of all righteousness and of those who seek to follow God. he and his followers try to lead us away from righteousness. he has many schemes to mislead and turn man from God. satan attempts to undermine us by confusing gender, promoting sexual relations outside of marriage, ridiculing marriage, and discouraging childbearing by married adults who would otherwise raise children in righteousness. The Bible condemns any form of sexual act that is considered “worthless” in God's eyes. homosexuality, beastiality, fornication, and adultery. God made Man & Woman as a perfect couple to be Fruitful, multiply and replenish the earth. Going against His image & His design is going against Him. we aren't here to change the word of God the word of God is here to change us, what are the actual \"fruits\"—the results—of the homosexual lifestyle? Suffering, Unfulfillment, Nothingness! homosexual activity leads to a host of serious diseases (STDs) HIV, Transmitted Infections, and other physical problems, mental health problems, major depression, anxiety, substance abuse and greater risk of suicidal and a greatly shortened lifespan and the suffering list goes on. Why are there so many diseases?  Why such young deaths?  It has to do with the sexual practices. It goes against how God created bodies to work. And when you violate God’s design, there are always consequences. Same-sex attraction is always an expression of the fallen nature. But if you repent now, God forgiveness starts the process and His power continues to work in us, when we say yes to Him. But when we fail to listen to God, then problems, affliction and suffering will be the consequence of disobedience. I say this Lovingly and to say truth in love is to love one another. Do not value your homosexuality Sin more than you value God. The only hope for the homosexual and all people who break God's laws is to turn to Christ. If we want to walk with Christ we must repent and reject our fleshly desires and deny ourselves. God promises the strength for victory over sin, including homosexuality, to all those who will believe in Jesus Christ for their Salvation.",
+      "yt_title": "How Pride in the UK was born - [CHANNEL]",
+      "yt_description": "This year marks the 50th anniversary of Pride in the UK, and it all started in the basement of a London university.\n\nThe Gay Liberation Front was making itself heard in protests across the capital throughout the early 70s when gay people were being arrested and same sex attraction was still considered to be a mental illness.\n\nBut by July 1972, Pride was born with 150 people taking part and a revolution was under way.\n\nPlease subscribe HERE [URL]\n\n#Pride #[CHANNEL]"
+    },
+    "output": {
+      "scope": {
+        "label": "group",
+        "evidence": [
+          {
+            "field": "yt_comment",
+            "quote": "homosexual activity leads to a host of serious diseases"
+          }
+        ]
+      },
+      "identity": [
+        {
+          "label": "l",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Same-sex attraction is always an expression of the fallen nature."
+            }
+          ]
+        },
+        {
+          "label": "g",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Same-sex attraction is always an expression of the fallen nature."
+            }
+          ]
+        },
+        {
+          "label": "b",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "Same-sex attraction is always an expression of the fallen nature."
+            }
+          ]
+        },
+        {
+          "label": "lgbtqia+",
+          "evidence": [
+            {
+              "field": "yt_comment",
+              "quote": "confusing gender"
+            },
+            {
+              "field": "yt_comment",
+              "quote": "homosexual activity leads to a host of serious diseases"
+            },
+            {
+              "field": "yt_title",
+              "quote": "How Pride in the UK was born"
+            },
+            {
+              "field": "yt_description",
+              "quote": "Pride in the UK"
+            }
+          ]
+        }
+      ],
+      "target": "group_l,g,b,lgbtqia+",
+      "reasoning": "The comment condemns same-sex attraction and relationships broadly in the Pride context, targeting lesbian and gay people, bisexual same-sex relationships, and the wider LGBTQIA+ community."
+    },
+    "allow_video_overlap": true
   }
 ]
 ```

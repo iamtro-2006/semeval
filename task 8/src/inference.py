@@ -85,6 +85,11 @@ def validate_demonstrations(examples, train_rows, evaluation_rows, variant):
     eval_videos = {(row['yt_title'].casefold().strip(), row['yt_description'].casefold().strip())
                    for row in evaluation_rows}
     eval_comments = {' '.join(row['yt_comment'].casefold().split()) for row in evaluation_rows}
+    video_exceptions = [example for example in examples if example.get('allow_video_overlap') is True]
+    if len(video_exceptions) > 1:
+        raise ValueError('Only one demonstration may allow video overlap.')
+    max_identities = max((len(parse_target(row['target'])[1]) for row in train_rows
+                          if row.get('target') and row['target'] != 'none'), default=0)
     seen = set()
     for example in examples:
         source_id = example.get('source_id')
@@ -98,10 +103,16 @@ def validate_demonstrations(examples, train_rows, evaluation_rows, variant):
             raise ValueError(f'Demo input differs from visible train fields: {source_id}')
         if example['output']['target'] != canonical_gold(source['target']):
             raise ValueError(f'Demo target differs from train gold: {source_id}')
+        allow_video_overlap = example.get('allow_video_overlap') is True
+        if allow_video_overlap and (source['target'] == 'none' or max_identities < 2 or
+                                    len(parse_target(source['target'])[1]) != max_identities):
+            raise ValueError('Video overlap is allowed only for a maximum-identity train demonstration.')
         source_video = (source['yt_title'].casefold().strip(), source['yt_description'].casefold().strip())
-        if (source_id in eval_ids or source_video in eval_videos or
+        if (source_id in eval_ids or
                 ' '.join(source['yt_comment'].casefold().split()) in eval_comments):
             raise ValueError(f'Demonstration overlaps evaluation data: {source_id}')
+        if source_video in eval_videos and not allow_video_overlap:
+            raise ValueError(f'Demonstration overlaps an evaluation video: {source_id}')
         _, _, error = validate_annotation(json.dumps(example['output']), example['input'])
         if error:
             raise ValueError(f'Invalid train evidence annotation {source_id}: {error}')
