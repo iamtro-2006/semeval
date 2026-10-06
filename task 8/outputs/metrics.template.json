@@ -1,0 +1,10 @@
+{
+  "status": "template_only",
+  "note": "No model run has been performed. These are uncomputed output fields.",
+  "n": null,
+  "full_target_exact_match": null,
+  "invalid_count": null,
+  "invalid_rate": null,
+  "false_positive_target_on_gold_none": null,
+  "task_c_on_gold_active": null
+}

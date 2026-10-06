@@ -1,0 +1,8 @@
+# Keep supplied dataset and text-bearing model outputs private.
+data/raw/
+data/split/
+outputs/*/
+__pycache__/
+*.pyc
+.venv*/
+.cache/
