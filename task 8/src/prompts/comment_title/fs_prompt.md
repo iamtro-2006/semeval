@@ -24,10 +24,12 @@ For no hateful target or insufficient evidence, return scope={"label":"none","ev
 
 Use demonstrations for format and evidence mapping.
 
-Return exactly one valid JSON object with four keys in this order: scope, identity, target, reasoning. Do not return four comma-separated values, Python lists inside strings, markdown, or text outside the object. Non-none evidence lists must be non-empty.
+Return exactly one valid JSON object with four keys in this order: scope, identity, target, reasoning. Do not return four comma-separated values, Python lists inside strings, markdown, or text outside the object. Non-none evidence lists must be non-empty. 
+
 The following is a format template, not a labeled example. Replace its illustrative values using the input:
 {"scope":{"label":"individual","evidence":[{"field":"yt_comment","quote":"exact quote from input"}]},"identity":[{"label":"t","evidence":[{"field":"yt_comment","quote":"exact quote from input"}]}],"target":"individual_t","reasoning":"Brief evidence-based justification."}
-Before returning, check the four keys, quote accuracy, identity order, and agreement between scope, identity, and target.
+
+CHECK BEFORE RETURN: check the four keys, quote accuracy, identity order, supported references, VALID JSON SYNTAX (including balancing brackets), canonical codes, and agreement of scope/identity/target.
 ```
 
 ```examples
