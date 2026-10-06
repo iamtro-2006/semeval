@@ -9,7 +9,7 @@ Identify who is attacked, rather than everyone mentioned. A country, religion, p
 
 Output fields:
 1. scope: label individual for a specific person or specifically identified people; group for an identity category or a community in general. Quote evidence identifying the attacked person or group. Include at least one quote from yt_comment; add context quotes when needed to resolve the reference. A video about one person does not imply individual scope.
-2. identity: a JSON array containing only supported identity labels, each with its own evidence list. Use each label once in the order below. Omit unsupported labels. One phrase may support multiple labels; list those labels separately with the relevant quote for each.
+2. identity: a JSON array containing only supported identity labels, each with its own evidence list. Use each label once in the order below. Omit unsupported labels. One phrase may support multiple labels; list those labels separately with the relevant quote for each. Different phrases may target different people or communities and support different labels; include each supported label with evidence linked to its own target. If several targets share a label, list that label once and include their relevant quotes in its evidence list.
 3. target: combine scope and the selected identity labels as <scope>_<codes>, in canonical order, separated by commas without spaces. The target must agree with scope.label and every identity.label. Never return scope alone, such as "group" or "individual".
 4. reasoning: one short sentence identifying the attacked person or community and explaining the evidence-to-label link. If evidence spans fields, briefly explain how the references connect. Keep all explanation inside this field.
 
