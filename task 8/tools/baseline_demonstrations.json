@@ -1,0 +1,100 @@
+{
+  "comment": [
+    {
+      "source_id": "training_EN_1613",
+      "target": "individual_b",
+      "reasoning": "The comment singles out Clive Davis and denies and ridicules his bisexual identity."
+    },
+    {
+      "source_id": "training_EN_1811",
+      "target": "group_l,g",
+      "reasoning": "The comment rejects same-sex marriages in general, targeting lesbian and gay couples rather than a specific couple."
+    },
+    {
+      "source_id": "training_EN_2450",
+      "target": "individual_t",
+      "reasoning": "The comment dismisses the transgender identity of the specific woman it refers to as Transwoman."
+    },
+    {
+      "source_id": "training_EN_1776",
+      "target": "group_lgbtqia+",
+      "reasoning": "The insult generalizes to the LGBTQ community as a whole, without singling out individual identity categories."
+    },
+    {
+      "source_id": "training_EN_1119",
+      "target": "group_b",
+      "reasoning": "The comment denies bisexual identity for men as a group, rather than targeting the person discussed in the video."
+    },
+    {
+      "source_id": "training_EN_1001",
+      "target": "individual_g",
+      "reasoning": "The comment singles out Varadkar and uses his gay identity to discredit his authority."
+    }
+  ],
+  "comment_title": [
+    {
+      "source_id": "training_EN_1613",
+      "target": "individual_b",
+      "reasoning": "The comment singles out Clive Davis and denies and ridicules his bisexual identity."
+    },
+    {
+      "source_id": "training_EN_1776",
+      "target": "group_lgbtqia+",
+      "reasoning": "The insult generalizes to the LGBTQ community as a whole, without singling out individual identity categories."
+    },
+    {
+      "source_id": "training_EN_2450",
+      "target": "individual_t",
+      "reasoning": "The comment dismisses the trans woman discussed in the video, linked by the title to Patricia Arquette's sister."
+    },
+    {
+      "source_id": "training_EN_1867",
+      "target": "group_l,g",
+      "reasoning": "The comment sarcastically compares same-sex marriage to marrying a dog; the title links that ridicule to gay and lesbian families as groups."
+    },
+    {
+      "source_id": "training_EN_0460",
+      "target": "group_l,g,lgbtqia+",
+      "reasoning": "The comment generalizes about gay and lesbian identities as abuse-driven or fashionable, then dismisses the broader identity-affirming community rather than specific individuals."
+    },
+    {
+      "source_id": "training_EN_0991",
+      "target": "group_l,g,b,lgbtqia+",
+      "reasoning": "The comment condemns same-sex attraction and relationships broadly in the Pride context, targeting lesbian and gay people, bisexual same-sex relationships, and the wider LGBTQIA+ community.",
+      "allow_video_overlap": true
+    }
+  ],
+  "comment_title_desc": [
+    {
+      "source_id": "training_EN_1613",
+      "target": "individual_b",
+      "reasoning": "The comment singles out Clive Davis and denies and ridicules his bisexual identity."
+    },
+    {
+      "source_id": "training_EN_1776",
+      "target": "group_lgbtqia+",
+      "reasoning": "The insult generalizes to the LGBTQ community as a whole, without singling out individual identity categories."
+    },
+    {
+      "source_id": "training_EN_2450",
+      "target": "individual_t",
+      "reasoning": "The comment dismisses a trans woman's identity; the title and description link her to Patricia Arquette's sister, Alexis Arquette."
+    },
+    {
+      "source_id": "training_EN_1867",
+      "target": "group_l,g",
+      "reasoning": "The comment mocks gay and lesbian families through a dog-marriage analogy, linked by the title and description to respect for those groups and their children."
+    },
+    {
+      "source_id": "training_EN_0460",
+      "target": "group_l,g,lgbtqia+",
+      "reasoning": "The comment attacks gay and lesbian identities and the wider identity-affirming community; the description links that general dismissal to an initiative encouraging gay and lesbian youth."
+    },
+    {
+      "source_id": "training_EN_0991",
+      "target": "group_l,g,b,lgbtqia+",
+      "reasoning": "The comment condemns same-sex attraction and relationships broadly in the Pride context, targeting lesbian and gay people, bisexual same-sex relationships, and the wider LGBTQIA+ community.",
+      "allow_video_overlap": true
+    }
+  ]
+}

@@ -183,120 +183,84 @@ bằng tiếng Anh, có `<language>` và `<input_json>`. Dùng chung train/dev/t
 TSV cho cả ba baseline, không tạo dữ liệu con. Code lọc các trường trước
 khi dựng messages, cho cả query và ví dụ few-shot:
 
-| input_variant | Trường model được đọc và trích bằng chứng |
+| input_variant | Trường model được đọc |
 |---|---|
 | comment | yt_comment |
 | comment_title | yt_comment, yt_title |
 | comment_title_desc | yt_comment, yt_title, yt_description |
 
 Input JSON không chứa ID, gold `target`, `hate_speech` hoặc `stereotype`.
-Parser từ chối evidence lấy từ trường không được đưa vào baseline đó.
+Output chỉ gồm hai trường:
 
-Output thống nhất theo thứ tự:
+1. `target`: `none` hoặc `<scope>_<identity_codes>`, ví dụ `individual_t`,
+   `group_l,g`. Giữ quy ước scope và thứ tự identity hiện có.
+2. `reasoning`: một câu tiếng Anh ngắn giải thích đối tượng và lý do chọn nhãn;
+   nêu liên kết ngữ cảnh khi cần. Không yêu cầu trích dẫn nguyên văn.
 
-1. `scope`: object có `label` (individual/group/none) và danh sách `evidence`;
-   xác định đối tượng bị nhắm tới, không suy scope chỉ từ title của video.
-2. `identity`: danh sách các object có `label` và `evidence`, chỉ liệt kê
-   identity được hỗ trợ, theo thứ tự chuẩn; không liệt kê chín mã với none.
-3. `target`: ghép scope với đúng các identity đã có bằng chứng.
-4. `reasoning`: một câu tiếng Anh ngắn giải thích đối tượng và liên kết
-   evidence với nhãn. Không xuất phần giải thích ngoài JSON.
+Không xuất object scope, danh sách identity hoặc evidence riêng. Nếu không có
+hateful target hoặc thiếu bằng chứng để xác định scope và identity, trả
+`{"target":"none","reasoning":"No supported hateful target can be identified."}`.
+Validator kiểm tra đúng hai key, target hợp lệ theo thứ tự chuẩn và reasoning
+là chuỗi không rỗng. Tính đúng về nghĩa cần đánh giá riêng.
 
-Ví dụ khái niệm: `l` phải gắn với một người/nhóm cụ thể, kèm đoạn text
-chứng minh lesbian; không chỉ trả `l` vì video có nhắc từ đó. `g`, `b`,
-`t`, `q`, `i`, `a`, `nb`, umbrella dùng cùng nguyên tắc.
+Few-shot giữ nguyên sáu mẫu trong mỗi file prompt hiện tại. Source ID, nhãn,
+reasoning và ngoại lệ video overlap được lưu trong
+`tools/baseline_demonstrations.json`; input được lấy lại từ train khi chạy
+`tools/build_baseline_prompts.py`. Tiện ích kiểm tra cả ba cấu hình trước khi
+ghi đè sáu prompt. Không tự chạy tiện ích này trong inference.
 
-Nếu không có hateful target hoặc không đủ evidence để xác định scope và
-identity, trả `target=none`, `scope={"label":"none","evidence":[]}`,
-`identity=[]`, và một lý do ngắn trong `reasoning`.
-Đây bao gồm yêu cầu abstain khi thiếu bằng chứng của bạn. Với dữ liệu gold,
-một trường hợp hate nhưng model không tìm được evidence có thể bị chấm sai
-vì model trả none; vẫn giữ prediction đó để đánh giá trung thực.
-
-Bằng chứng là quote nguyên văn, liên tục trong field gốc, giữ ngôn ngữ
-đầu vào. Mỗi evidence có `field` và `quote`; khi cần nhiều trường, dùng
-nhiều evidence riêng và giải thích liên kết trong reasoning. Validator
-kiểm tra quote tồn tại và scope/identity/target nhất quán;
-việc quote đúng có thực sự chứng minh identity hay không vẫn cần đọc đánh
-giá về nghĩa, không được xem kiểm tra substring là bảo đảm semantic accuracy.
-
-Few-shot hiện dùng cùng sáu mẫu từ **train EN hiện tại** cho cả ba baseline:
-
-| Source ID | Gold target | Vai trò minh họa |
-|---|---|---|
-| training_EN_1613 | individual_b | Clive Davis; phủ nhận bisexual identity của một người cụ thể |
-| training_EN_1811 | group_l,g | Khái quát và phủ nhận tính hợp lệ của gay marriages |
-| training_EN_2450 | individual_t | Một trans woman; title liên kết tới chị/em gái Patricia Arquette, description xác định Alexis Arquette |
-| training_EN_1776 | group_lgbtqia+ | Target là cộng đồng umbrella |
-| training_EN_1119 | group_b | Phủ nhận bisexual identity của men như một nhóm |
-| training_EN_1001 | individual_g | Varadkar; chỉ baseline có description mới dùng tên đầy đủ Leo Varadkar |
-
-Sáu demo gồm ba individual và ba group, cùng source IDs và gold labels
-trên cả ba baseline. Không có ví dụ none vì train v4 không chứa nhãn đó;
-giữ quy tắc none cho trường hợp thiếu bằng chứng trong input hiển thị.
-Không bổ sung mẫu từ raw, val/test hoặc nhãn hiếm không có trong train
-chỉ để tăng độ phủ. Bộ sáu mẫu hiện minh họa l/g/b/t/umbrella, chưa phủ
-mọi identity hoặc mọi tổ hợp nhãn.
-
-Text và target lấy nguyên từ train; evidence và reasoning được biên soạn
-thủ công vì TSV không có gold evidence. Giữ nguyên gold giữa ba baseline;
-chỉ thay text được cung cấp và evidence có thể truy cập. Annotation có thể
-cần review về nghĩa, đặc biệt với identity denial hoặc multi-label.
-
-Trước khi load model, code kiểm tra source ID thuộc train đã cấu hình,
-text khớp các trường train, target khớp gold, quote tồn tại, và demonstration
-không trùng ID/video proxy/comment với tập đang chấm. Few-shot nên chạy
-dev/test; chạy trên cả train hiện tại sẽ bị từ chối vì chứa chính các demo.
-Khi thay train hoặc chuyển IT/NL, cập nhật block `examples` bằng các mẫu
-từ train tương ứng; chỉ đổi `<language>` không tự dịch hoặc chọn lại demo.
-Không cần sửa pipeline. `tools/build_baseline_prompts.py` là tiện ích soạn
-lại sáu file cho train EN này, không tự chạy trong inference.
+Trước khi load model, pipeline kiểm tra nguồn train, text, gold target,
+schema và overlap ID/comment/video với tập đang chấm. Giữ nguyên ngoại lệ
+video overlap đã được khai báo cho tối đa một demo có số identity lớn nhất;
+không cho phép trùng ID hoặc comment. Few-shot chạy trên train sẽ bị từ chối
+nếu tập đó chứa demo. Train hiện tại không có none; không lấy ví dụ từ dev/test
+để bổ sung. Chuyển ngôn ngữ cần chọn lại demo từ train tương ứng.
 
 ## 7. Inference và outputs
 
 Các bước trên server:
 
-1. Đọc config và TSV đã được chọn, bằng parser hỗ trợ quoted newline.
-2. Chọn prompt theo baseline/mode, chỉ đưa các trường được phép vào input;
-   kiểm tra nguồn train của few-shot trước khi thay language và dựng messages.
-3. Load tokenizer/model qua hai Transformers Auto classes.
-4. Dựng chat messages bằng tokenizer chat template. Few-shot có các cặp
-   user/assistant ví dụ trước query cuối.
-5. Generate evidence annotations và target cùng một response JSON.
-6. Đọc riêng trường `target` để lấy prediction. Validate schema/evidence
-   độc lập và ghi `annotation_valid`, `annotation_error` để kiểm tra.
-7. Nếu có gold target, chỉ chấm nhãn `target`; lỗi evidence/schema không
-   loại một target hợp lệ. Nếu không có gold, ghi not_evaluated.
+1. Đọc config và TSV, hỗ trợ quoted newline.
+2. Chọn prompt và lọc các trường input; kiểm tra nguồn few-shot.
+3. Load tokenizer/model bằng Transformers và dựng chat messages.
+4. Generate JSON với target và reasoning.
+5. Đọc target để chấm điểm, kiểm tra schema độc lập để ghi diagnostics.
+6. Lưu predictions, metrics và manifest; giữ mọi dòng kể cả output lỗi.
 
-Input budget mặc định 8.192 tokens và output budget 1.536 tokens vì output
-có bằng chứng, không chỉ một nhãn. Bạn chỉnh trong config. Không tự cắt
-text làm mất bằng chứng: mẫu vượt budget được ghi lỗi và giữ trong output.
-JSON không hợp lệ/quote không tồn tại cũng được giữ nguyên raw response,
-prediction rỗng và trạng thái invalid; không tự sửa thành none hoặc bỏ dòng.
+Input budget mặc định 8.192 tokens; output budget giảm xuống 256 tokens cho
+nhãn và một câu lý do. Không tự cắt input: mẫu vượt budget được ghi lỗi.
+JSON lỗi vẫn được giữ trong raw_output. Cơ chế cứu nhãn hiện có chỉ đọc một
+trường target dạng JSON string rõ ràng; không suy từ gold hoặc đổi lỗi thành none.
+Một nhãn hợp lệ vẫn được chấm nếu schema hoặc reasoning sai; annotation_valid
+phản ánh lỗi định dạng độc lập.
 
-`predictions.tsv` lưu ID, language, input_variant, prompt_mode, gold nếu có, pred_target, valid/error,
-evidence_json, raw_output, input/output tokens và latency.
-`run.json` lưu config, hashes dữ liệu/prompt/train, demo IDs, trường input
-được dùng và model revision. Mỗi baseline/mode/split nằm trong thư mục riêng.
+`predictions.tsv` lưu ID, language, input_variant, prompt_mode, gold, pred_target,
+valid/error, annotation_valid/annotation_error, reasoning, raw_output,
+input/output tokens và latency. Cột reasoning thay cho evidence_json ở các run
+mới; output cũ giữ nguyên. `run.json` thêm output_schema, cùng config, hashes,
+demo IDs, input fields và model revision. Mỗi run có thư mục riêng.
 
-`metrics.json` có exact match trên toàn bộ dữ liệu kể cả none, invalid-rate,
-false-positive target trên gold none, và bộ `src/metrics.py` trên gold có
-target. Bộ metrics sẵn có không chấm gold none nên phần này được gọi rõ là
-conditional Task C report, không gọi là toàn bộ full-target score. Không có
-gold evidence trong TSV hiện tại nên chưa tính F1 cho evidence extraction.
-Với v4, mọi gold đều có target, nên toàn bộ tập đang chạy cũng là tập
-gold-active; điểm số không đánh giá việc phân biệt hate và non-hate.
+`metrics.json` chỉ chấm target: exact match toàn bộ, invalid rate, false positive
+trên gold none và Task C trên gold-active. Không chấm chất lượng reasoning.
+Split v4 chỉ có gold-active, nên không đánh giá khả năng phân biệt hate/non-hate.
+
+Notebook `notebooks/inference.ipynb` cho phép chọn model, input variant, mode,
+split và shots; kiểm tra dữ liệu trước khi load model, rồi gọi cùng pipeline.
+Config riêng lưu trong outputs/notebook; notebook hiển thị metrics và số lỗi
+schema. Đặt RUN_INFERENCE = True sau khi kiểm tra config. Notebook không kèm
+dữ liệu hoặc output thực. Môi trường notebook cần Jupyter/IPython, ngoài
+requirements inference; không cài hoặc tải model tự động khi mở notebook.
 
 ## 8. Trình tự nghiên cứu
 
 | Bước | Việc cần thực hiện |
 |---|---|
 | 1 | Bạn thêm train/dev/test; chỉnh paths, language, repo ID và GPU settings |
-| 2 | Review prompt và các cặp evidence; chọn few-shot examples từ train |
+| 2 | Review prompt và lý do chọn nhãn; chọn few-shot examples từ train |
 | 3 | Cài một môi trường requirements trên server và chạy inference trên dev |
 | 4 | So sánh zero/few-shot với 3B, 7B, 14B, 32B; dùng cùng data và protocol |
 | 5 | Nếu nghiên cứu GPTQ, thay repo ID và so với bản thường cùng size, budget và prompt |
-| 6 | Phân tích lỗi none, group/individual, từng identity, multi-label và evidence |
+| 6 | Phân tích lỗi none, group/individual, từng identity, multi-label và lý do chọn nhãn |
 | 7 | Cố định prompt/config/model rồi chạy test; không tune bằng test |
 
 Matrix đầy đủ EN: 4 kích thước × 2 precision × 3 input baselines × 2 prompt modes = 48 runs,
@@ -322,7 +286,7 @@ python src/inference.py --input-variant comment_title_desc --prompt-mode few_sho
 
 Mỗi lần chạy tự ghi predictions và metrics vào thư mục output riêng.
 Đã kiểm tra cú pháp Python, đúng field filtering, nguồn/text/gold của sáu
-demo, quotes, và việc tách demo khỏi dev/test bằng dữ liệu hiện có; chưa
+demo, schema hai trường và overlap với dev/test bằng dữ liệu hiện có; chưa
 load model, đo token thực tế hoặc chạy inference trên GPU.
 Inference không tự chia lại dữ liệu. Giữ dữ liệu và output có trích văn bản
 ở môi trường nghiên cứu riêng theo điều khoản README.

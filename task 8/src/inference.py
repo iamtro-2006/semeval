@@ -79,7 +79,7 @@ def visible_input(row, variant):
 
 
 def validate_demonstrations(examples, train_rows, evaluation_rows, variant):
-    """Verify actual train provenance, gold labels, visible fields and evidence."""
+    """Verify actual train provenance, gold labels, visible fields and output schema."""
     train_by_id = {row[ID_FIELD]: row for row in train_rows}
     eval_ids = {row[ID_FIELD] for row in evaluation_rows}
     eval_videos = {(row['yt_title'].casefold().strip(), row['yt_description'].casefold().strip())
@@ -115,7 +115,7 @@ def validate_demonstrations(examples, train_rows, evaluation_rows, variant):
             raise ValueError(f'Demonstration overlaps an evaluation video: {source_id}')
         _, _, error = validate_annotation(json.dumps(example['output']), example['input'])
         if error:
-            raise ValueError(f'Invalid train evidence annotation {source_id}: {error}')
+            raise ValueError(f'Invalid train annotation {source_id}: {error}')
 
 
 def make_messages(blocks, examples, row, language, variant):
@@ -132,7 +132,7 @@ def make_messages(blocks, examples, row, language, variant):
     return messages
 
 
-def validate_annotation(raw, row):
+def validate_annotation(raw, row=None):
     """Check the compact annotation for diagnostics; target scoring is separate."""
     def unique_keys(pairs):
         obj = {}
@@ -142,53 +142,13 @@ def validate_annotation(raw, row):
             obj[key] = value
         return obj
 
-    def evidence(items):
-        if not isinstance(items, list) or not items:
-            raise ValueError('Evidence must be a non-empty list.')
-        for item in items:
-            if not isinstance(item, dict) or set(item) != {'field', 'quote'}:
-                raise ValueError('Evidence needs field and quote only.')
-            field, quote = item['field'], item['quote']
-            if field not in TEXT_FIELDS or field not in row:
-                raise ValueError('Invalid evidence source field.')
-            if not isinstance(quote, str) or not quote.strip() or quote not in row[field]:
-                raise ValueError('Evidence is not an exact source span.')
-
     try:
         obj = json.loads(raw.strip(), object_pairs_hook=unique_keys)
-        if not isinstance(obj, dict) or set(obj) != {'scope', 'identity', 'target', 'reasoning'}:
-            raise ValueError('Expected scope, identity, target, reasoning only.')
-        scope, identities = obj['scope'], obj['identity']
-        if not isinstance(scope, dict) or set(scope) != {'label', 'evidence'}:
-            raise ValueError('scope needs label and evidence.')
-        if not isinstance(identities, list):
-            raise ValueError('identity must be a JSON array.')
+        if not isinstance(obj, dict) or set(obj) != {'target', 'reasoning'}:
+            raise ValueError('Expected target and reasoning only.')
         if not isinstance(obj['reasoning'], str) or not obj['reasoning'].strip():
             raise ValueError('reasoning must be a non-empty string.')
-        if obj['target'] == 'none':
-            if scope != {'label': 'none', 'evidence': []} or identities:
-                raise ValueError('none requires none scope with empty evidence and identity arrays.')
-            return 'none', obj, ''
-        parsed_scope, codes = parse_target(obj['target'])
-        if scope['label'] != parsed_scope:
-            raise ValueError('Target scope must agree with scope.label.')
-        evidence(scope['evidence'])
-        if not any(item['field'] == 'yt_comment' for item in scope['evidence']):
-            raise ValueError('scope evidence must include a quote from yt_comment.')
-        supported = []
-        for identity in identities:
-            if not isinstance(identity, dict) or set(identity) != {'label', 'evidence'}:
-                raise ValueError('Each identity needs label and evidence.')
-            code = identity['label']
-            if code not in IDENTITIES or code in supported:
-                raise ValueError('Identity labels must be supported codes without duplicates.')
-            evidence(identity['evidence'])
-            supported.append(code)
-        if set(supported) != codes:
-            raise ValueError('identity labels and target codes must agree.')
-        if supported != [code for code in IDENTITIES if code in codes]:
-            raise ValueError('identity labels need canonical order.')
-        canonical = parsed_scope + '_' + ','.join(k for k in IDENTITIES if k in codes)
+        canonical = canonical_gold(obj['target'])
         if canonical != obj['target']:
             raise ValueError('Target needs canonical order without duplicates or spaces.')
         return canonical, obj, ''
@@ -204,12 +164,22 @@ def canonical_gold(value):
 
 
 def extract_target(raw):
-    """Read the predicted label independently of evidence/schema validation."""
+    """Read the predicted label independently of output schema validation."""
     try:
         obj = json.loads(raw.strip())
         if not isinstance(obj, dict) or 'target' not in obj:
             raise ValueError('Output must be a JSON object with a target field.')
         return canonical_gold(obj['target']), ''
+    except json.JSONDecodeError as exc:
+        # Malformed output can leave the model's target field intact.
+        # Recover only a single, JSON-encoded target string; never infer from gold.
+        candidates = re.findall(r'"target"\s*:\s*("(?:\\.|[^"\\])*")', raw)
+        if len(candidates) != 1:
+            return '', f'{exc}; found {len(candidates)} target fields'
+        try:
+            return canonical_gold(json.loads(candidates[0])), ''
+        except (ValueError, TypeError) as target_exc:
+            return '', str(target_exc)
     except (ValueError, TypeError) as exc:
         return '', str(exc)
 
@@ -226,7 +196,7 @@ def evaluate(rows, predictions):
         'false_positive_target_on_gold_none': sum(r['target'] == 'none' and p not in ('none', '') for r, p in zip(rows, predictions)),
         'task_c_on_gold_active': evaluate_targets([rows[i]['target'] for i in active],
                                                  [predictions[i] for i in active]) if active else None,
-        'note': 'Metrics score the target label only. Evidence/schema errors do not invalidate a valid target. Conditional Task C scores exclude gold=none.',
+        'note': 'Metrics score the target label only. Schema errors do not invalidate a valid target. Conditional Task C scores exclude gold=none.',
     }
 
 
@@ -337,7 +307,8 @@ def main():
                 'prompt_sha256': hashlib.sha256(prompt_path.read_bytes()).hexdigest(),
                 'resolved_model_revision': getattr(model.config, '_commit_hash', None),
                 'input_variant': variant, 'input_fields': list(INPUT_VARIANTS[variant]),
-                'demo_source': 'actual train rows; evidence annotations manually curated' if examples else None,
+                'output_schema': ['target', 'reasoning'],
+                'demo_source': 'actual train rows; reasons manually curated' if examples else None,
                 'demo_ids': [example['source_id'] for example in examples],
                 'train_sha256': hashlib.sha256(train_path.read_bytes()).hexdigest() if train_path else None,
                 'status': 'running', 'rows': len(rows)}
@@ -346,7 +317,7 @@ def main():
     save_manifest()
     predictions = []
     columns = [ID_FIELD, 'language', 'input_variant', 'prompt_mode', 'gold', 'pred_target', 'valid', 'error',
-               'annotation_valid', 'annotation_error', 'evidence_json', 'raw_output',
+               'annotation_valid', 'annotation_error', 'reasoning', 'raw_output',
                'input_tokens', 'output_tokens', 'latency_seconds']
     try:
         with (output / 'predictions.tsv').open('w', encoding='utf-8', newline='') as stream, \
@@ -381,7 +352,7 @@ def main():
                                  'input_variant': variant, 'prompt_mode': mode, 'gold': row.get('target', ''),
                                  'pred_target': target, 'valid': not bool(error), 'error': error,
                                  'annotation_valid': not bool(annotation_error), 'annotation_error': annotation_error,
-                                 'evidence_json': json.dumps(annotation, ensure_ascii=False) if annotation else '',
+                                 'reasoning': annotation['reasoning'] if annotation else '',
                                  'raw_output': raw, 'input_tokens': count, 'output_tokens': output_tokens,
                                  'latency_seconds': elapsed})
                 stream.flush()

@@ -63,3 +63,16 @@ You may keep the dataset after the shared task concludes for ongoing non-commerc
 
 ###### 5. Ethical Use
 This dataset contains content related to LGBTQ+ communities and stereotypes. Please handle it with care and respect. You may not use the dataset, any outputs derived from it, or any models trained on it in ways that could target, harm, discriminate against, or demean LGBTQ+ individuals or communities.
+
+## Baseline inference
+
+Model output uses only `target` and `reasoning` (one short English sentence).
+Run `python src/inference.py` from this directory, or open
+`notebooks/inference.ipynb` in a Jupyter/IPython environment. The notebook calls
+the same pipeline; choose the mode, input fields and split, then enable
+`RUN_INFERENCE` to run the model. Supply the private TSV files configured in
+`src/configs/inference.json`.
+
+New prediction files store `reasoning` instead of `evidence_json`; target metrics
+remain independent of schema diagnostics. See `PLAN.md` for the protocol.
+Run regression checks with `python -m unittest discover -s tests -v`.
