@@ -130,7 +130,8 @@ def decisions(rows, questions, inference=False):
         common = dict(source_id=row[ID_FIELD], state=state, origin=row['origin'], split=row['split'])
         for code, question in questions['identities'].items():
             yield {**common, 'key': code, 'question': question['instructions'],
-                   'options': [('yes', 'The statement is true.'), ('no', 'The statement is false.')],
+                   'options': [('yes', 'The requested identity is a supported hateful target.'),
+                               ('no', 'The requested identity is not supported as a hateful target.')],
                    'answer': 0 if code in codes else 1, 'supervised': bool(label)}
         if scope is not None or inference:
             yield {**common, 'key': 'scope', 'question': questions['scope']['instructions'],
@@ -143,7 +144,7 @@ def prompt(task, questions, reverse=False):
     options = task['options'][::-1] if reverse else task['options']
     lines = '\n'.join(f'[{letter}] {key}: {description}'
                       for letter, (key, description) in zip('AB', options))
-    instructions = questions['instructions'] + ' ' + questions['identity_rules']
+    instructions = questions['instructions']
     return (f'State:\n{json.dumps(task["state"], ensure_ascii=False)}\n\n'
             f'Question: {instructions} {task["question"]}\nOptions:\n{lines}\n\n'
             'Answer with the letter of the best option only.')
@@ -240,6 +241,7 @@ class Run:
         self.tokens = {}
         self.checked = False
         print(json.dumps(self.summary, indent=2))
+        print(f'Prompt version: {self.questions["version"]}')
         print('No dataset copies will be written. Shared videos retain the existing split protocol.')
 
     def _messages(self, task, reverse=False):
@@ -581,6 +583,7 @@ class ZeroShot(Run):
                       for split, rows in self.groups.items()}
         self.model, self.tokens, self.checked = None, {}, False
         print({split: len(rows) for split, rows in self.groups.items()})
+        print(f'Prompt version: {self.questions["version"]}')
         print(f'{self.mode}: published BF16 weights; no task fine-tuning or adapter.')
 
     def _load(self):

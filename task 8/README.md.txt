@@ -149,6 +149,20 @@ The same selected demonstrations are used for both dev and DATA within that run.
 Never tune on test; compare modes on the same DATA and threshold-selection protocol.
 
 Each inference run saves only settings.json, predictions.csv and metrics.json,
-with a final ZIP download cell. OUTPUT defaults to /content/zero-shot or
-/content/few-shot by mode (Kaggle uses /kaggle/working). Use a fresh output folder
+with a final ZIP download cell. OUTPUT defaults to /content/zero-shot-v2 or
+/content/few-shot-v2 by mode (Kaggle uses /kaggle/working). Use a fresh output folder
 for repeated runs. The notebook does not create LoRA adapters or backward passes.
+
+Prompt v2 is shared by both inference modes and fine-tuning. Each identity question
+now includes its definition and selection boundaries directly; the scope question
+also defines individual/group targeting. A/B choices mean supported/not-supported
+hateful targeting. There is no separate identity_rules block. questions.json and
+the saved settings record version 2; each job prints the prompt version.
+
+The notebooks default to new output folders: zero-shot-v2, few-shot-v2, and
+results-v2 for training. Keep the initial 0.5 threshold when comparing v1/v2 on
+the same dev/model, then select a fresh threshold on dev if needed. Thresholds
+selected using v1 probabilities do not establish an optimum for v2. Existing
+training checkpoint identity checks prevent resuming a v1 run as v2. The six
+few-shot examples, source IDs, original gold targets and order are unchanged.
+Prompt improvements require GPU evaluation; no quality improvement is assumed.
