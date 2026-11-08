@@ -152,6 +152,48 @@ def order_for(seed, epoch, task):
     return bool(hashlib.sha256(identity.encode()).digest()[0] % 2)
 
 
+def select_examples(train_rows, evaluation_rows, questions, shots, seed):
+    """Select short, question-specific train examples, balancing A/B where possible."""
+    if type(shots) is not int or shots < 1:
+        raise ValueError('SHOTS must be a positive integer.')
+    ids = {r[ID_FIELD] for r in evaluation_rows}
+    comments = {' '.join(r['yt_comment'].casefold().split()) for r in evaluation_rows}
+    videos = {(r['yt_title'].casefold().strip(), r['yt_description'].casefold().strip())
+              for r in evaluation_rows}
+    pool = []
+    for row in train_rows:
+        if not row.get('target'):
+            raise ValueError('Few-shot TRAIN must contain gold target labels.')
+        if row[ID_FIELD].startswith('synthetic_') or row.get('origin') == 'synthetic':
+            continue
+        video = (row['yt_title'].casefold().strip(), row['yt_description'].casefold().strip())
+        if (row[ID_FIELD] not in ids and ' '.join(row['yt_comment'].casefold().split()) not in comments
+                and video not in videos):
+            pool.append({**row, 'split': 'train', 'origin': 'original'})
+    random.Random(seed).shuffle(pool)
+    # Stable sorting keeps randomized tie order and favors shorter context windows.
+    pool.sort(key=lambda r: sum(len(r[k]) for k in questions['state_fields']))
+    candidates = {key: [] for key in (*IDENTITIES, 'scope')}
+    for task in decisions(pool, questions):
+        candidates[task['key']].append(task)
+    selected, summary = {}, {}
+    for key, tasks in candidates.items():
+        if len(tasks) < shots:
+            raise ValueError(f'Only {len(tasks)} eligible train examples for {key}; '
+                             f'need {shots}. Reduce SHOTS or check train/evaluation overlap.')
+        picked = []
+        for answer in (0, 1):
+            picked.extend([t for t in tasks if t['answer'] == answer][:shots//2])
+        used = {t['source_id'] for t in picked}
+        picked.extend([t for t in tasks if t['source_id'] not in used][:shots-len(picked)])
+        random.Random(f'{seed}:{key}').shuffle(picked)
+        selected[key] = picked
+        summary[key] = dict(source_ids=[t['source_id'] for t in picked],
+                            answer_counts={label: sum(t['answer'] == i for t in picked)
+                                           for i, (label, _) in enumerate(picked[0]['options'])})
+    return selected, summary
+
+
 def decode(probabilities, threshold):
     codes = [k for k in IDENTITIES if probabilities[k] >= threshold]
     if not codes:
@@ -215,6 +257,9 @@ class Run:
         print(json.dumps(self.summary, indent=2))
         print('No dataset copies will be written. Shared videos retain the existing split protocol.')
 
+    def _messages(self, task, reverse=False):
+        return [{'role': 'user', 'content': prompt(task, self.questions, reverse)}]
+
     def check(self):
         """Check GPU, tokenizer and every prompt length before loading model weights."""
         import torch
@@ -243,7 +288,7 @@ class Run:
             for i, task in enumerate(tasks):
                 for reverse in ((False, True) if split == 'train' else (False,)):
                     text = self.tokenizer.apply_chat_template(
-                        [{'role': 'user', 'content': prompt(task, self.questions, reverse)}],
+                        self._messages(task, reverse),
                         tokenize=False, add_generation_prompt=True, enable_thinking=False)
                     ids = self.tokenizer(text, add_special_tokens=False, truncation=False)['input_ids']
                     longest = max(longest, len(ids))
@@ -513,6 +558,7 @@ class Run:
 
 class ZeroShot(Run):
     """Published checkpoint only: no training data, synthetic samples or adapters."""
+    mode = 'zero_shot'
     def __init__(self, data, output='/content/zero-shot', dev='', **options):
         allowed = {'model', 'revision', 'max_length', 'seed'}
         if set(options) - allowed:
@@ -550,7 +596,7 @@ class ZeroShot(Run):
                       for split, rows in self.groups.items()}
         self.model, self.tokens, self.checked = None, {}, False
         print({split: len(rows) for split, rows in self.groups.items()})
-        print('Zero-shot: published BF16 weights; no task training, examples or adapter.')
+        print(f'{self.mode}: published BF16 weights; no task fine-tuning or adapter.')
 
     def _load(self):
         if self.model is None:
@@ -559,7 +605,7 @@ class ZeroShot(Run):
             self.model.eval()
 
     def train(self, *args, **kwargs):
-        raise RuntimeError('ZeroShot does not train. Use Run with train.ipynb for fine-tuning.')
+        raise RuntimeError('Inference does not train. Use Run with train.ipynb for fine-tuning.')
 
     def evaluate(self):
         raise RuntimeError('Use job.infer() with inference.ipynb for zero-shot inference.')
@@ -574,11 +620,12 @@ class ZeroShot(Run):
         self._load()
         self.output.mkdir(parents=True, exist_ok=True)
         import importlib.metadata
-        settings = dict(mode='zero_shot_dev_threshold' if tune_on_dev else 'zero_shot',
+        settings = dict(mode=self.mode + '_dev_threshold' if tune_on_dev else self.mode,
                         config=self.config, resolved_revision=self.revision, threshold=threshold,
                         threshold_source='original dev' if tune_on_dev else 'fixed before inference',
                         questions=self.questions, adapters=False, training=False, synthetic_samples=False,
                         inputs={k: digest(v) for k, v in self.paths.items()},
+                        examples=getattr(self, 'example_summary', {}),
                         code_sha256=digest(HERE / 'run.py'),
                         versions={p: importlib.metadata.version(p) for p in ('torch', 'transformers')},
                         probability='Restricted A/B softmax; no domain calibration.', status='running')
@@ -599,10 +646,40 @@ class ZeroShot(Run):
             save_json(self.output / 'metrics.json', metrics)
             settings['status'] = 'complete'
             print(json.dumps(metrics['data'], indent=2))
-            print(f'Threshold: {threshold:.2f}; zero-shot results: {self.output}')
+            print(f'Threshold: {threshold:.2f}; {self.mode} results: {self.output}')
             return metrics
         except Exception as exc:
             settings.update(status='failed', error=f'{type(exc).__name__}: {exc}')
             raise
         finally:
             save_json(self.output / 'settings.json', settings)
+
+
+class FewShot(ZeroShot):
+    """In-context demonstrations from original train; published weights stay frozen."""
+    mode = 'few_shot'
+
+    def __init__(self, data, train, output='/content/few-shot', dev='', shots=4, **options):
+        super().__init__(data, output=output, dev=dev, **options)
+        path = Path(train).expanduser().resolve()
+        if not train or not path.is_file():
+            raise FileNotFoundError(f'Set TRAIN to the original labeled train TSV: {path}')
+        if path == self.output or self.output in path.parents:
+            raise ValueError('Keep OUTPUT separate from dataset files.')
+        evaluation_rows = [row for rows in self.groups.values() for row in rows]
+        self.examples, self.example_summary = select_examples(
+            read_tsv(path), evaluation_rows, self.questions, shots, self.config['seed'])
+        self.paths['train'] = path
+        self.config['shots'] = shots
+        print(json.dumps(self.example_summary, indent=2))
+        print('Example counts are per question. Missing positive labels are not fabricated.')
+
+    def _messages(self, task, reverse=False):
+        messages = []
+        for example in self.examples[task['key']]:
+            answer = 1 - example['answer'] if reverse else example['answer']
+            messages.extend([
+                {'role': 'user', 'content': prompt(example, self.questions, reverse)},
+                {'role': 'assistant', 'content': 'AB'[answer]},
+            ])
+        return messages + super()._messages(task, reverse)

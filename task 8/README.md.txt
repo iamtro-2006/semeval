@@ -107,23 +107,41 @@ Download it before the session ends. To resume, restore its contents into OUTPUT
 keep the same settings/data/library versions/code and set RESUME=True. Test can be
 added later for final evaluation; it never selects the checkpoint or threshold.
 
-## OpenJev zero-shot inference
+## OpenJev zero-shot and few-shot inference
 
 Open `openjev/inference.ipynb`, or use:
-[Zero-shot in Colab](https://colab.research.google.com/github/iamtro-2006/semeval/blob/main/task%208/openjev/inference.ipynb).
+[Inference in Colab](https://colab.research.google.com/github/iamtro-2006/semeval/blob/main/task%208/openjev/inference.ipynb).
 
-It clones the same main branch and asks for DATA and OUTPUT paths. There is no
-training TSV, adapter, synthetic augmentation or optimization. The published BF16
-checkpoint uses the same questions, A/B readout, decoding and metrics as training.
+Upload the original local splits from `data/split/en`, keeping the filenames:
+
+| File | Rows | Role |
+|---|---:|---|
+| StereoQueerEval_EN_train.tsv | 1,107 | Few-shot example source; unnecessary for zero-shot |
+| StereoQueerEval_EN_val.tsv | 316 | DATA for development experiments |
+| StereoQueerEval_EN_test.tsv | 159 | DATA for final held-out evaluation |
+
+Choose MODE="zero_shot" or MODE="few_shot". Both use the published BF16 checkpoint,
+without task fine-tuning, adapters or boosting. DATA defaults to the original val
+file; few-shot additionally reads the original train file, with SHOTS=4 examples
+per question. Synthetic samples and previously generated augmented TSVs are not
+used by this inference notebook. Original train has no positive a examples; this
+limitation is shown in the demonstration counts instead of inventing positives.
+
+Few-shot uses user/assistant demonstrations answering the same identity/scope
+question with A/B. Selection is deterministic, favors short examples, and balances
+answers where eligible positives/negatives exist. Examples overlapping DATA or DEV
+by ID, normalized comment or video are excluded. This can leave no positive
+examples for some rare identities. settings.json records source IDs, answer counts,
+train hash and mode; it does not publish the example texts.
+
 The default threshold is fixed at 0.5. DATA may omit target labels: predictions
-are still saved, but metrics are marked not_evaluated.
-
-Optionally enable TUNE_ON_DEV with a separate labeled DEV file to select a global
-threshold before predicting DATA. This is recorded as zero_shot_dev_threshold;
-the default fixed-threshold run is recorded as zero_shot. To compare against the
-fine-tuned model's default protocol, use the same original dev for selecting each
-model's threshold and the same untouched test as DATA. Never tune on test.
+are still saved, but metrics are marked not_evaluated. Optionally enable TUNE_ON_DEV
+with a separate labeled DEV file: use DATA=test and DEV=val for final evaluation.
+The mode is then recorded as zero_shot_dev_threshold or few_shot_dev_threshold.
+The same selected demonstrations are used for both dev and DATA within that run.
+Never tune on test; compare modes on the same DATA and threshold-selection protocol.
 
 Each inference run saves only settings.json, predictions.csv and metrics.json,
-with a final ZIP download cell. Use a different output folder for each run. The
-notebook does not instantiate a LoRA adapter or perform backward passes.
+with a final ZIP download cell. OUTPUT defaults to /content/zero-shot or
+/content/few-shot by mode (Kaggle uses /kaggle/working). Use a fresh output folder
+for repeated runs. The notebook does not create LoRA adapters or backward passes.

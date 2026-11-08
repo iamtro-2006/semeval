@@ -259,7 +259,7 @@ class OpenJevDataTests(unittest.TestCase):
             self.assertLessEqual(metrics['protocol']['threshold'], 0.35)
             self.assertEqual(metrics['data']['full_target_exact_match'], 1)
 
-    def test_inference_notebook_has_no_training_or_mount(self):
+    def test_inference_notebook_has_two_modes_without_training_or_mount(self):
         notebook = json.loads((ROOT / 'openjev/inference.ipynb').read_text(encoding='utf-8'))
         codes = []
         for i, cell in enumerate(notebook['cells']):
@@ -272,11 +272,72 @@ class OpenJevDataTests(unittest.TestCase):
         text = '\n'.join(codes)
         self.assertIn('BRANCH = "main"', text)
         self.assertIn('run.ZeroShot(', text)
+        self.assertIn('run.FewShot(', text)
+        self.assertIn('MODE = "zero_shot"', text)
+        self.assertIn('StereoQueerEval_EN_val.tsv', text)
+        self.assertIn('StereoQueerEval_EN_train.tsv', text)
         self.assertIn('THRESHOLD = 0.5', text)
         self.assertIn('TUNE_ON_DEV = False', text)
         self.assertNotIn('job.train(', text)
         self.assertNotIn('drive.mount', text)
-        self.assertNotIn('TRAIN =', text)
+
+    def test_few_shot_selection_excludes_evaluation_overlap_and_synthetic_rows(self):
+        train = []
+        for i in range(12):
+            train.append(dict(StereoQueerEval_id=f'demo_{i}', yt_title=f'Video {i}',
+                              yt_description=f'Description {i}', yt_comment=f'Comment {i}',
+                              target='individual_t' if i % 2 else 'group_g'))
+        evaluation = [train[0], {**train[1], 'StereoQueerEval_id': 'query_1', 'yt_title': 'Other'},
+                      {**train[2], 'StereoQueerEval_id': 'query_2', 'yt_comment': 'Other comment'}]
+        selected, summary = run.select_examples(train + self.rows, evaluation, self.questions, 4, 42)
+        self.assertEqual(summary, run.select_examples(train + self.rows, evaluation, self.questions, 4, 42)[1])
+        for key, examples in selected.items():
+            self.assertEqual(len(examples), 4)
+            self.assertTrue(all(e['origin'] == 'original' for e in examples))
+            self.assertFalse({'demo_0', 'demo_1', 'demo_2'} & {e['source_id'] for e in examples})
+            self.assertFalse(any(e['source_id'].startswith('synthetic_') for e in examples))
+        self.assertEqual(summary['a']['answer_counts'], {'yes': 0, 'no': 4})
+        self.assertEqual(summary['scope']['answer_counts'], {'individual': 2, 'group': 2})
+        with self.assertRaises(ValueError):
+            run.select_examples(train, evaluation, self.questions, 0, 42)
+        with self.assertRaises(ValueError):
+            run.select_examples(train, evaluation, self.questions, 100, 42)
+
+    def test_few_shot_messages_and_saved_mode_use_train_answers_only(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+            config = make_config(Path(tmp))
+            train = []
+            for i in range(6):
+                train.append(dict(StereoQueerEval_id=f'demo_{i}', yt_title=f'Train video {i}',
+                                  yt_description=f'Train description {i}', yt_comment=f'Train comment {i}',
+                                  target='individual_t' if i % 2 else 'group_g'))
+            with Path(config['train']).open('w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=list(train[0]), delimiter='\t')
+                writer.writeheader()
+                writer.writerows(train)
+            job = run.FewShot(config['test'], train=config['train'], shots=4, output=config['output'])
+            task = job.tasks['data'][0]
+            messages = job._messages(task)
+            self.assertEqual(len(messages), 9)
+            self.assertEqual([m['role'] for m in messages], ['user', 'assistant'] * 4 + ['user'])
+            for j, example in enumerate(job.examples[task['key']]):
+                self.assertEqual(messages[2*j+1]['content'], 'AB'[example['answer']])
+            self.assertEqual(messages, job._messages({**task, 'answer': 1-task['answer']}))
+            reverse = job._messages(task, reverse=True)
+            self.assertEqual(reverse[1]['content'], 'AB'[1-job.examples[task['key']][0]['answer']])
+            scores = {k: 0.01 for k in run.IDENTITIES}
+            scores.update(a=0.9, scope=0.1)
+            job.revision = 'published-checkpoint'
+            with patch.object(job, '_load'), patch.object(job, '_predict', return_value=[scores]), \
+                    patch('importlib.metadata.version', return_value='test-version'):
+                metrics = job.infer()
+            settings = json.loads((Path(config['output']) / 'settings.json').read_text())
+            self.assertEqual(settings['mode'], 'few_shot')
+            self.assertFalse(settings['training'])
+            self.assertFalse(settings['adapters'])
+            self.assertEqual(settings['examples'], job.example_summary)
+            self.assertIn('train', settings['inputs'])
+            self.assertEqual(metrics['protocol']['mode'], 'few_shot')
 
 
 if __name__ == '__main__':
