@@ -180,6 +180,83 @@ def load_examples(train_rows, evaluation_rows, questions, path=DEMO_PROMPT):
     return selected, summary, source
 
 
+def balance_examples(train_rows, evaluation_rows, questions, path=DEMO_PROMPT):
+    """Four demonstrations per question: two for each answer, train sources only."""
+    _, _, original_source = load_examples(train_rows, [], questions, path)
+    old_order = {source_id: i for i, source_id in enumerate(original_source['source_ids'])}
+    eval_ids = {r[ID_FIELD] for r in evaluation_rows}
+    eval_comments = {' '.join(r['yt_comment'].casefold().split()) for r in evaluation_rows}
+    eval_videos = {(r['yt_title'].casefold().strip(), r['yt_description'].casefold().strip())
+                   for r in evaluation_rows}
+
+    def eligible(row):
+        return (row[ID_FIELD] not in eval_ids
+                and ' '.join(row['yt_comment'].casefold().split()) not in eval_comments
+                and (row['yt_title'].casefold().strip(), row['yt_description'].casefold().strip())
+                not in eval_videos)
+
+    real = []
+    for row in train_rows:
+        if not row.get('target'):
+            raise ValueError('Balanced few-shot TRAIN must have gold targets.')
+        if row.get('origin') == 'synthetic' or row[ID_FIELD].startswith('synthetic_'):
+            continue
+        if eligible(row):
+            real.append({**row, 'split': 'train', 'origin': 'original'})
+    sample_file = json.loads((HERE / 'samples.json').read_text(encoding='utf-8'))
+    # Existing a train samples are reusable; dev samples never become demonstrations.
+    synthetic = [r for r in load_samples() if r['split'] == 'train'] + sample_file.get('few_shot', [])
+    seen_ids = {r[ID_FIELD] for r in train_rows}
+    seen_comments = {' '.join(r['yt_comment'].casefold().split()) for r in train_rows}
+    fallback = []
+    for row in synthetic:
+        if row.get('split') != 'train' or row.get('origin') != 'synthetic':
+            raise ValueError('Few-shot fallback must be explicitly marked synthetic/train.')
+        canonical_gold(row['target'])
+        if row[ID_FIELD] in seen_ids or ' '.join(row['yt_comment'].casefold().split()) in seen_comments:
+            raise ValueError('Synthetic fallback duplicates a training/example row.')
+        seen_ids.add(row[ID_FIELD])
+        seen_comments.add(' '.join(row['yt_comment'].casefold().split()))
+        if eligible(row):
+            fallback.append(row)
+    pools = {key: [] for key in (*IDENTITIES, 'scope')}
+    for task in decisions(real + fallback, questions):
+        pools[task['key']].append(task)
+    selected, summary = {}, {}
+    for key, tasks in pools.items():
+        preferred = sample_file.get('preferred', {}).get(key, [])
+        tasks.sort(key=lambda t: (t['origin'] == 'synthetic',
+                                  t['source_id'] not in old_order,
+                                  old_order.get(t['source_id'], 999),
+                                  t['source_id'] not in preferred,
+                                  sum(len(t['state'][k]) for k in questions['state_fields']),
+                                  t['source_id']))
+        buckets = [[t for t in tasks if t['answer'] == answer][:2] for answer in (0, 1)]
+        if any(len(bucket) < 2 for bucket in buckets):
+            raise ValueError(f'Cannot build 2/2 examples for {key} without evaluation overlap. '
+                             'Use EXAMPLES="original" or supply suitable original train data.')
+        # Alternate answers; original examples precede added train/synthetic records in each bucket.
+        if list(pools).index(key) % 2:
+            buckets.reverse()  # Avoid making the final demonstration No for every question.
+        picked = [task for pair in zip(*buckets) for task in pair]
+        selected[key] = picked
+        summary[key] = dict(source_ids=[t['source_id'] for t in picked],
+                            answer_counts={label: sum(t['answer'] == i for t in picked)
+                                           for i, (label, _) in enumerate(picked[0]['options'])},
+                            origins={t['source_id']: t['origin'] for t in picked},
+                            reused_original_ids=[t['source_id'] for t in picked if t['source_id'] in old_order])
+    selected_ids = sorted({t['source_id'] for tasks in selected.values() for t in tasks})
+    targets = {r[ID_FIELD]: canonical_gold(r['target']) for r in real + fallback}
+    source = dict(original_source, policy='balanced_2_2', video_overlap_exception_ids=[],
+                  overlap_policy='No ID, normalized comment or video overlap with DATA/DEV.',
+                  synthetic_source_sha256=digest(HERE / 'samples.json'),
+                  synthetic_ids=sorted({t['source_id'] for tasks in selected.values() for t in tasks
+                                        if t['origin'] == 'synthetic'}),
+                  seed_source_ids=original_source['source_ids'], seed_targets=original_source['targets'],
+                  source_ids=selected_ids, targets=[targets[source_id] for source_id in selected_ids])
+    return selected, summary, source
+
+
 def decode(probabilities, threshold):
     codes = [k for k in IDENTITIES if probabilities[k] >= threshold]
     if not codes:
@@ -611,7 +688,8 @@ class ZeroShot(Run):
         settings = dict(mode=self.mode + '_dev_threshold' if tune_on_dev else self.mode,
                         config=self.config, resolved_revision=self.revision, threshold=threshold,
                         threshold_source='original dev' if tune_on_dev else 'fixed before inference',
-                        questions=self.questions, adapters=False, training=False, synthetic_samples=False,
+                        questions=self.questions, adapters=False, training=False,
+                        synthetic_samples=bool(getattr(self, 'example_source', {}).get('synthetic_ids')),
                         inputs={k: digest(v) for k, v in self.paths.items()},
                         examples=getattr(self, 'example_summary', {}),
                         example_source=getattr(self, 'example_source', None),
@@ -631,7 +709,9 @@ class ZeroShot(Run):
             metrics = {split: report(self.groups[split], values, threshold) for split, values in scores.items()}
             metrics['protocol'] = dict(mode=settings['mode'], threshold=threshold,
                                        selected_on=settings['threshold_source'], calibration='none',
-                                       task_training=False, adapter=False, synthetic_samples=False)
+                                       task_training=False, adapter=False,
+                                       examples_policy=getattr(self, 'example_source', {}).get('policy', 'original' if self.mode == 'few_shot' else 'none'),
+                                       synthetic_samples=settings['synthetic_samples'])
             save_json(self.output / 'metrics.json', metrics)
             settings['status'] = 'complete'
             print(json.dumps(metrics['data'], indent=2))
@@ -645,10 +725,10 @@ class ZeroShot(Run):
 
 
 class FewShot(ZeroShot):
-    """In-context demonstrations from original train; published weights stay frozen."""
+    """Balanced or historical demonstrations; published weights stay frozen."""
     mode = 'few_shot'
 
-    def __init__(self, data, train, output='/content/few-shot', dev='', **options):
+    def __init__(self, data, train, output='/content/few-shot', dev='', examples='balanced', **options):
         super().__init__(data, output=output, dev=dev, **options)
         path = Path(train).expanduser().resolve()
         if not train or not path.is_file():
@@ -656,13 +736,21 @@ class FewShot(ZeroShot):
         if path == self.output or self.output in path.parents:
             raise ValueError('Keep OUTPUT separate from dataset files.')
         evaluation_rows = [row for rows in self.groups.values() for row in rows]
-        self.examples, self.example_summary, self.example_source = load_examples(
+        if examples not in ('balanced', 'original'):
+            raise ValueError('EXAMPLES must be balanced or original.')
+        loader = balance_examples if examples == 'balanced' else load_examples
+        self.examples, self.example_summary, self.example_source = loader(
             read_tsv(path), evaluation_rows, self.questions, path=DEMO_PROMPT)
         self.paths['train'] = path
         self.paths['demo_prompt'] = DEMO_PROMPT
-        self.config['shots'] = len(self.example_source['source_ids'])
+        if examples == 'balanced':
+            self.paths['demo_samples'] = HERE / 'samples.json'
+        self.config['examples'] = examples
+        self.config['shots'] = len(self.examples['l'])
         print(json.dumps(self.example_summary, indent=2))
-        print('Using all examples from the original comment_title_desc prompt in the original order.')
+        print('Balanced: 2 Yes/2 No (scope: 2 individual/2 group); synthetic fallback IDs are disclosed.'
+              if examples == 'balanced' else
+              'Using all examples from the original comment_title_desc prompt in the original order.')
 
     def _messages(self, task, reverse=False):
         messages = []

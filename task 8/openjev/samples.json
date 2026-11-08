@@ -170,5 +170,89 @@
       "human_reviewed": false,
       "purpose": "identity-mention negative control"
     }
-  ]
+  ],
+  "few_shot": [
+    {
+      "StereoQueerEval_id": "synthetic_q_prompt_001",
+      "split": "train",
+      "yt_title": "Members discuss identifying as queer",
+      "yt_description": "A community meeting where people describe their queer identity.",
+      "yt_comment": "People who identify as queer should be banned from this club.",
+      "target": "group_q",
+      "origin": "synthetic",
+      "author": "assistant",
+      "human_reviewed": false,
+      "purpose": "few-shot fallback only"
+    },
+    {
+      "StereoQueerEval_id": "synthetic_q_prompt_002",
+      "split": "train",
+      "yt_title": "Students discuss questioning their orientation",
+      "yt_description": "Students share experiences of exploring or being uncertain about their sexual orientation.",
+      "yt_comment": "Students questioning their sexual orientation should be barred from student organizations.",
+      "target": "group_q",
+      "origin": "synthetic",
+      "author": "assistant",
+      "human_reviewed": false,
+      "purpose": "few-shot fallback only"
+    },
+    {
+      "StereoQueerEval_id": "synthetic_i_prompt_001",
+      "split": "train",
+      "yt_title": "An intersex applicant discusses job interviews",
+      "yt_description": "Alex is intersex and describes experiences applying for work.",
+      "yt_comment": "Reject Alex for the job solely because Alex is intersex.",
+      "target": "individual_i",
+      "origin": "synthetic",
+      "author": "assistant",
+      "human_reviewed": false,
+      "purpose": "few-shot fallback only"
+    },
+    {
+      "StereoQueerEval_id": "synthetic_i_prompt_002",
+      "split": "train",
+      "yt_title": "Intersex residents discuss equal access to housing",
+      "yt_description": "Intersex people talk about discrimination involving their sex characteristics.",
+      "yt_comment": "Landlords should refuse housing to intersex people.",
+      "target": "group_i",
+      "origin": "synthetic",
+      "author": "assistant",
+      "human_reviewed": false,
+      "purpose": "few-shot fallback only"
+    },
+    {
+      "StereoQueerEval_id": "synthetic_nb_prompt_001",
+      "split": "train",
+      "yt_title": "A non-binary student joins a school club",
+      "yt_description": "Casey identifies as non-binary, not exclusively as a man or a woman.",
+      "yt_comment": "Remove Casey from the club for identifying as non-binary.",
+      "target": "individual_nb",
+      "origin": "synthetic",
+      "author": "assistant",
+      "human_reviewed": false,
+      "purpose": "few-shot fallback only"
+    },
+    {
+      "StereoQueerEval_id": "synthetic_nb_prompt_002",
+      "split": "train",
+      "yt_title": "Non-binary residents discuss neighborhood events",
+      "yt_description": "Residents with non-binary gender identities describe their community activities.",
+      "yt_comment": "Non-binary people should be excluded from neighborhood events.",
+      "target": "group_nb",
+      "origin": "synthetic",
+      "author": "assistant",
+      "human_reviewed": false,
+      "purpose": "few-shot fallback only"
+    }
+  ],
+  "few_shot_policy": "Use only to fill missing positive demonstrations after original train/video-overlap checks. Never add these records to fine-tuning or dev/test.",
+  "preferred": {
+    "b": [
+      "training_EN_1119"
+    ],
+    "t": [
+      "training_EN_2030"
+    ]
+  },
+  "preferred_policy": "Prefer these manually inspected train additions after eligible examples from the old prompt. Keep original train gold labels."
 }

@@ -328,7 +328,7 @@ class OpenJevDataTests(unittest.TestCase):
                 writer = csv.DictWriter(f, fieldnames=list(train[0]), delimiter='\t')
                 writer.writeheader()
                 writer.writerows(train)
-            job = run.FewShot(config['test'], train=config['train'], output=config['output'])
+            job = run.FewShot(config['test'], train=config['train'], examples='original', output=config['output'])
             task = job.tasks['data'][0]
             messages = job._messages(task)
             self.assertEqual(len(messages), 13)
@@ -351,6 +351,61 @@ class OpenJevDataTests(unittest.TestCase):
             self.assertEqual(settings['examples'], job.example_summary)
             self.assertIn('train', settings['inputs'])
             self.assertEqual(metrics['protocol']['mode'], 'few_shot')
+
+    def test_balanced_examples_have_two_answers_each_and_no_evaluation_overlap(self):
+        _, original = run.load_prompt(run.DEMO_PROMPT, 'few_shot')
+        train = [{**e['input'], run.ID_FIELD: e['source_id'], 'target': e['output']['target']}
+                 for e in original]
+        for code in ('t', 'b'):
+            train.append(dict(StereoQueerEval_id='extra_'+code, target='group_'+code,
+                              yt_title='Extra video '+code, yt_description='Extra description '+code,
+                              yt_comment='Extra train comment '+code))
+        # The old prompt permits this video's overlap; balanced mode must exclude it.
+        evaluation = [{**train[5], run.ID_FIELD: 'heldout', 'yt_comment': 'Heldout comment'}]
+        selected, summary, source = run.balance_examples(train, evaluation, self.questions)
+        for key, examples in selected.items():
+            self.assertEqual(len(examples), 4)
+            self.assertEqual(sorted(e['answer'] for e in examples), [0, 0, 1, 1])
+            self.assertNotIn('training_EN_0991', [e['source_id'] for e in examples])
+            self.assertTrue(all(e['split'] == 'train' for e in examples))
+            self.assertTrue(all('synthetic_a_dev_' not in e['source_id'] for e in examples))
+            self.assertEqual(list(summary[key]['answer_counts'].values()), [2, 2])
+        self.assertEqual(source['policy'], 'balanced_2_2')
+        self.assertEqual(source['video_overlap_exception_ids'], [])
+        self.assertTrue(source['synthetic_ids'])
+        self.assertTrue(all(e['origin'] == 'synthetic' for e in selected['a'] if e['answer'] == 0))
+        self.assertEqual(source['synthetic_source_sha256'], run.digest(ROOT / 'openjev/samples.json'))
+        # The prompt-only additions must not silently expand fine-tuning data.
+        self.assertEqual(len(run.load_samples()), 12)
+
+    def test_balanced_few_shot_saves_synthetic_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+            config = make_config(Path(tmp))
+            _, original = run.load_prompt(run.DEMO_PROMPT, 'few_shot')
+            train = [{**e['input'], run.ID_FIELD: e['source_id'], 'target': e['output']['target']}
+                     for e in original]
+            train.append(dict(StereoQueerEval_id='extra_t', target='group_t',
+                              yt_title='Extra video', yt_description='Extra description',
+                              yt_comment='Extra comment'))
+            with Path(config['train']).open('w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=list(train[0]), delimiter='\t')
+                writer.writeheader()
+                writer.writerows(train)
+            job = run.FewShot(config['test'], train=config['train'], output=config['output'])
+            self.assertEqual(job.config['shots'], 4)
+            self.assertEqual(len(job._messages(job.tasks['data'][0])), 9)
+            job.revision = 'published-checkpoint'
+            scores = {k: 0.01 for k in run.IDENTITIES}
+            scores.update(a=0.9, scope=0.1)
+            with patch.object(job, '_load'), patch.object(job, '_predict', return_value=[scores]), \
+                    patch('importlib.metadata.version', return_value='test-version'):
+                metrics = job.infer()
+            settings = json.loads((Path(config['output']) / 'settings.json').read_text())
+            self.assertTrue(settings['synthetic_samples'])
+            self.assertFalse(settings['training'])
+            self.assertEqual(settings['config']['examples'], 'balanced')
+            self.assertEqual(metrics['protocol']['examples_policy'], 'balanced_2_2')
+            self.assertTrue(metrics['protocol']['synthetic_samples'])
 
 
 if __name__ == '__main__':

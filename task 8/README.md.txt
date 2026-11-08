@@ -122,47 +122,52 @@ Upload the original local splits from `data/split/en`, keeping the filenames:
 
 Choose MODE="zero_shot" or MODE="few_shot". Both use the published BF16 checkpoint,
 without task fine-tuning, adapters or boosting. DATA defaults to the original val
-file; few-shot additionally reads the original train file, using all six examples
-from the existing three-field Qwen prompt for every question. Synthetic samples and previously generated augmented TSVs are not
-used by this inference notebook. Original train has no positive a examples; this
-limitation is shown in the demonstration counts instead of inventing positives.
+file; few-shot additionally reads the original train file.
 
-Few-shot reads every example directly from
-`src/prompts/comment_title_desc/fs_prompt.md`, preserving all six source IDs, input
-text, gold targets and their order. It only converts each example's target into
-an A/B answer for the corresponding identity/scope question. It does not select,
-rebalance, shuffle, replace or generate demonstrations. There is no SHOTS setting.
-The old examples cover l/g/b/t/lgbtqia+, with no a/q/i/nb positives. The umbrella
-label is not treated as an a-positive label.
+EXAMPLES="balanced" is the few-shot default: four demonstrations per question,
+two Yes/two No, and two individual/two group for scope. It prioritizes eligible
+examples from the old Qwen prompt, then original train additions. The inspected
+bisexual and transgender additions are preferred over other additions. Other
+train candidates favor shorter inputs. Original gold labels are preserved.
 
-The same provenance, text/gold and overlap validator as Qwen checks examples
-against TRAIN and DATA/DEV. The existing video-overlap exception for
-training_EN_0991 is preserved and recorded; no ID/comment overlap is allowed.
-settings.json records the source prompt hash, train hash, ordered IDs, targets,
-answer counts and declared video exception. The original prompt is not modified.
+Balanced mode excludes all ID, normalized-comment and video overlap with DATA/DEV,
+including the old video's exception. If fewer than two positive/negative original
+train examples remain, it uses explicitly marked synthetic train examples from
+samples.json. Existing a train samples are reusable. The new few_shot section
+contains q/intersex/non-binary fallback examples only; these are never added to
+fine-tuning or dev/test. No synthetic dev records are used as demonstrations.
+If balance cannot be reached without evaluation overlap, the job fails instead
+of inventing or relabeling records. This is an experimental variant, not a claim
+that artificial examples establish real-world quality.
 
-The default threshold is fixed at 0.5. DATA may omit target labels: predictions
-are still saved, but metrics are marked not_evaluated. Optionally enable TUNE_ON_DEV
-with a separate labeled DEV file: use DATA=test and DEV=val for final evaluation.
-The mode is then recorded as zero_shot_dev_threshold or few_shot_dev_threshold.
-The same selected demonstrations are used for both dev and DATA within that run.
-Never tune on test; compare modes on the same DATA and threshold-selection protocol.
+EXAMPLES="original" retains all six examples from
+src/prompts/comment_title_desc/fs_prompt.md, their original gold and order.
+It uses the Qwen provenance/text/gold validator and preserves the declared
+training_EN_0991 video-overlap exception, never ID/comment overlap. The old
+examples have no positive q/i/a/nb demonstrations. The umbrella label does not
+count as a-positive.
 
-Each inference run saves only settings.json, predictions.csv and metrics.json,
-with a final ZIP download cell. OUTPUT defaults to /content/zero-shot-v2 or
-/content/few-shot-v2 by mode (Kaggle uses /kaggle/working). Use a fresh output folder
-for repeated runs. The notebook does not create LoRA adapters or backward passes.
+Each job prints source IDs, answer counts, and synthetic provenance per question.
+settings.json stores the examples policy, selected IDs/targets, old seed pool,
+train/prompt/sample hashes and origins. Synthetic use is also declared in the
+metrics protocol. The same demonstrations are used for dev and DATA in one run;
+selection depends on which evaluation videos must be excluded.
 
-Prompt v2 is shared by both inference modes and fine-tuning. Each identity question
-now includes its definition and selection boundaries directly; the scope question
-also defines individual/group targeting. A/B choices mean supported/not-supported
-hateful targeting. There is no separate identity_rules block. questions.json and
-the saved settings record version 2; each job prints the prompt version.
+The default identity threshold is 0.5. DATA may omit targets: predictions are saved
+but metrics are marked not_evaluated. Optionally enable TUNE_ON_DEV with a separate
+labeled DEV file: use DATA=test and DEV=val for final evaluation. Never select
+thresholds or examples using test labels. Compare configurations on the same
+original dev first and keep the test held out from prompt selection.
 
-The notebooks default to new output folders: zero-shot-v2, few-shot-v2, and
-results-v2 for training. Keep the initial 0.5 threshold when comparing v1/v2 on
-the same dev/model, then select a fresh threshold on dev if needed. Thresholds
-selected using v1 probabilities do not establish an optimum for v2. Existing
-training checkpoint identity checks prevent resuming a v1 run as v2. The six
-few-shot examples, source IDs, original gold targets and order are unchanged.
-Prompt improvements require GPU evaluation; no quality improvement is assumed.
+The notebook exports only settings.json, predictions.csv and metrics.json, with
+ZIP download. Few-shot OUTPUT includes balanced/original in its name so runs stay
+separate; zero-shot keeps zero-shot-v2. Choose a new output folder for repeats.
+No dataset copies, adapters, optimizer states or training checkpoints are created
+by inference.
+
+Prompt v2 definitions are unchanged by example balancing. The four-example
+balanced variant and the historical six-example original variant use the same
+question wording, A/B readout and decoding. Only the demonstrations differ.
+Zero-shot has no demonstrations. Training augmentation still uses the existing
+four a-positive/two negative train records, with synthetic dev reported separately.
+All behavior checks run on CPU; actual OpenJev quality requires GPU evaluation.
