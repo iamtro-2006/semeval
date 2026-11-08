@@ -87,8 +87,8 @@ and accepts TRAIN, DEV, optional TEST, and OUTPUT paths. Upload TSV files direct
 to the session; no Drive mount or local GPU is needed. On Kaggle the clone uses
 `/kaggle/working/semeval`; enable Internet and set dataset paths accordingly.
 
-The four files in `openjev/` are `train.ipynb`, `run.py`, `questions.json` and
-`samples.json`. Fine-tuning uses BF16 LoRA on OpenJev Flash 9B, without quantizing
+The `openjev/` folder contains `train.ipynb`, `inference.ipynb`, `run.py`,
+`questions.json` and `samples.json`. Fine-tuning uses BF16 LoRA on OpenJev Flash 9B, without quantizing
 the base weights. A GPU forward/backward and adapter save/reload check run in the
 notebook. Actual 9B GPU execution has not been validated on the local CPU machine.
 
@@ -106,3 +106,24 @@ OUTPUT contains only `adapter/`, one `checkpoint/`, `settings.json`, `history.cs
 Download it before the session ends. To resume, restore its contents into OUTPUT,
 keep the same settings/data/library versions/code and set RESUME=True. Test can be
 added later for final evaluation; it never selects the checkpoint or threshold.
+
+## OpenJev zero-shot inference
+
+Open `openjev/inference.ipynb`, or use:
+[Zero-shot in Colab](https://colab.research.google.com/github/iamtro-2006/semeval/blob/main/task%208/openjev/inference.ipynb).
+
+It clones the same main branch and asks for DATA and OUTPUT paths. There is no
+training TSV, adapter, synthetic augmentation or optimization. The published BF16
+checkpoint uses the same questions, A/B readout, decoding and metrics as training.
+The default threshold is fixed at 0.5. DATA may omit target labels: predictions
+are still saved, but metrics are marked not_evaluated.
+
+Optionally enable TUNE_ON_DEV with a separate labeled DEV file to select a global
+threshold before predicting DATA. This is recorded as zero_shot_dev_threshold;
+the default fixed-threshold run is recorded as zero_shot. To compare against the
+fine-tuned model's default protocol, use the same original dev for selecting each
+model's threshold and the same untouched test as DATA. Never tune on test.
+
+Each inference run saves only settings.json, predictions.csv and metrics.json,
+with a final ZIP download cell. Use a different output folder for each run. The
+notebook does not instantiate a LoRA adapter or perform backward passes.

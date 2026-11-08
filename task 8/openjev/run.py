@@ -1,4 +1,4 @@
-"""OpenJev BF16 LoRA workflow used by train.ipynb. GPU work runs on Colab.
+"""Shared OpenJev workflow for train.ipynb and inference.ipynb on Colab.
 
 Only final reports, an adapter and one resumable checkpoint are written.
 Task prompts follow OpenJev's letter-option layout; probabilities here are
@@ -122,13 +122,14 @@ def prepare(config):
 def decisions(rows, questions, inference=False):
     """One source comment yields nine binary tasks and one conditional scope task."""
     for row in rows:
-        scope, codes = (None, set()) if row['target'] == 'none' else parse_target(row['target'])
+        label = row.get('target', '')
+        scope, codes = (None, set()) if label in ('', 'none') else parse_target(label)
         state = {k: row[k] for k in questions['state_fields']}
         common = dict(source_id=row[ID_FIELD], state=state, origin=row['origin'], split=row['split'])
         for code, question in questions['identities'].items():
             yield {**common, 'key': code, 'question': question['instructions'],
                    'options': [('yes', 'The statement is true.'), ('no', 'The statement is false.')],
-                   'answer': 0 if code in codes else 1, 'supervised': True}
+                   'answer': 0 if code in codes else 1, 'supervised': bool(label)}
         if scope is not None or inference:
             yield {**common, 'key': 'scope', 'question': questions['scope']['instructions'],
                    'options': list(questions['scope']['criteria'].items()),
@@ -166,6 +167,10 @@ def report(rows, scores, threshold):
         raise ValueError('Rows and predictions must align.')
     targets = [decode(p, threshold)[0] for p in scores]
     result = evaluate(rows, targets)
+    if result['status'] != 'evaluated':
+        result.update(abstain_count=sum(not value for value in targets),
+                      coverage=sum(bool(value) for value in targets) / len(rows))
+        return result
     tp = fp = fn = 0
     brier = 0.0
     for row, p in zip(rows, scores):
@@ -255,13 +260,11 @@ class Run:
         self.checked = True
         print('Input checks passed. No weights loaded yet.')
 
-    def _load(self):
-        if self.model is not None:
-            return
+    def _base(self):
+        """Load the published BF16 model without creating or attaching an adapter."""
         if not self.checked:
             self.check()
         from transformers import AutoModelForImageTextToText
-        from peft import LoraConfig, TaskType, get_peft_model
         torch = self.torch
         base = AutoModelForImageTextToText.from_pretrained(
             self.config['model'], revision=self.revision, dtype=torch.bfloat16,
@@ -269,6 +272,14 @@ class Run:
         base.config.use_cache = False
         if hasattr(base.config, 'text_config'):
             base.config.text_config.use_cache = False
+        return base
+
+    def _load(self):
+        if self.model is not None:
+            return
+        from peft import LoraConfig, TaskType, get_peft_model
+        base = self._base()
+        torch = self.torch
         allowed = {'q_proj', 'v_proj', 'gate_proj', 'up_proj', 'down_proj'}
         modules = [name for name, layer in base.named_modules()
                    if name.startswith('model.language_model.')
@@ -445,6 +456,20 @@ class Run:
                 scores[task['source_id']][task['key']] = probability
         return [scores[r[ID_FIELD]] for r in self.groups[split]]
 
+    def _write_predictions(self, scores, threshold):
+        fields = ['id', 'split', 'origin', 'gold', 'target', 'status', 'p_individual',
+                  *['p_' + k for k in IDENTITIES]]
+        with (self.output / 'predictions.csv').open('w', encoding='utf-8', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=fields)
+            writer.writeheader()
+            for split, values in scores.items():
+                for row, p in zip(self.groups[split], values):
+                    target, status = decode(p, threshold)
+                    writer.writerow(dict(id=row[ID_FIELD], split=split, origin=row['origin'],
+                                         gold=canonical_gold(row['target']) if row.get('target') else '',
+                                         target=target, status=status,
+                                         p_individual=p['scope'], **{'p_'+k: p[k] for k in IDENTITIES}))
+
     def evaluate(self):
         """Freeze the global threshold on real dev before reading test predictions."""
         self._load()
@@ -470,17 +495,7 @@ class Run:
         for split in ('dev_synthetic', 'test'):
             if self.groups.get(split):
                 scores[split] = self._predict(split)
-        fields = ['id', 'split', 'origin', 'gold', 'target', 'status', 'p_individual',
-                  *['p_' + k for k in IDENTITIES]]
-        with (self.output / 'predictions.csv').open('w', encoding='utf-8', newline='') as stream:
-            writer = csv.DictWriter(stream, fieldnames=fields)
-            writer.writeheader()
-            for split, values in scores.items():
-                for row, p in zip(self.groups[split], values):
-                    target, status = decode(p, threshold)
-                    writer.writerow(dict(id=row[ID_FIELD], split=split, origin=row['origin'],
-                                         gold=canonical_gold(row['target']), target=target, status=status,
-                                         p_individual=p['scope'], **{'p_'+k: p[k] for k in IDENTITIES}))
+        self._write_predictions(scores, threshold)
         metrics = {split: report(self.groups[split], values, threshold) for split, values in scores.items()}
         metrics['protocol'] = dict(threshold=threshold, selected_on='original dev',
                                    checkpoint_selected_on='original dev question loss',
@@ -494,3 +509,100 @@ class Run:
                           for k, r in metrics.items() if k != 'protocol'}, indent=2))
         print(f'Threshold: {threshold:.2f}; results: {self.output}')
         return metrics
+
+
+class ZeroShot(Run):
+    """Published checkpoint only: no training data, synthetic samples or adapters."""
+    def __init__(self, data, output='/content/zero-shot', dev='', **options):
+        allowed = {'model', 'revision', 'max_length', 'seed'}
+        if set(options) - allowed:
+            raise ValueError(f'Unknown inference settings: {sorted(set(options)-allowed)}')
+        self.config = {key: options.get(key, DEFAULTS[key]) for key in allowed}
+        if type(self.config['max_length']) is not int or self.config['max_length'] < 1:
+            raise ValueError('max_length must be a positive integer.')
+        if type(self.config['seed']) is not int:
+            raise ValueError('seed must be an integer.')
+        self.output = Path(output).expanduser().resolve()
+        self.paths, self.groups = {}, {}
+        for split, value in [('data', data), ('dev', dev)]:
+            if split == 'dev' and not value:
+                continue
+            path = Path(value).expanduser().resolve()
+            if not value or not path.is_file():
+                raise FileNotFoundError(f'Set {split.upper()} to an existing TSV file: {path}')
+            if path == self.output or self.output in path.parents:
+                raise ValueError('Keep OUTPUT separate from dataset files.')
+            rows = [{**row, 'target': row.get('target', ''), 'split': split, 'origin': 'original'}
+                    for row in read_tsv(path)]
+            if split == 'dev' and not all(row['target'] for row in rows):
+                raise ValueError('Optional DEV must have gold targets for threshold selection.')
+            self.paths[split], self.groups[split] = path, rows
+        if 'dev' in self.groups:
+            ids = {row[ID_FIELD] for row in self.groups['data']}
+            comments = {' '.join(row['yt_comment'].casefold().split()) for row in self.groups['data']}
+            if any(row[ID_FIELD] in ids or ' '.join(row['yt_comment'].casefold().split()) in comments
+                   for row in self.groups['dev']):
+                raise ValueError('DEV for threshold selection must be separate from DATA (IDs/comments).')
+        self.questions = json.loads((HERE / 'questions.json').read_text(encoding='utf-8'))
+        if tuple(self.questions['identities']) != IDENTITIES:
+            raise ValueError('Questions must cover all nine identities in canonical order.')
+        self.tasks = {split: list(decisions(rows, self.questions, inference=True))
+                      for split, rows in self.groups.items()}
+        self.model, self.tokens, self.checked = None, {}, False
+        print({split: len(rows) for split, rows in self.groups.items()})
+        print('Zero-shot: published BF16 weights; no task training, examples or adapter.')
+
+    def _load(self):
+        if self.model is None:
+            self.model = self._base()
+            self.model.requires_grad_(False)
+            self.model.eval()
+
+    def train(self, *args, **kwargs):
+        raise RuntimeError('ZeroShot does not train. Use Run with train.ipynb for fine-tuning.')
+
+    def evaluate(self):
+        raise RuntimeError('Use job.infer() with inference.ipynb for zero-shot inference.')
+
+    def infer(self, threshold=0.5, tune_on_dev=False):
+        if not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 0 < threshold < 1:
+            raise ValueError('threshold must be between 0 and 1.')
+        if tune_on_dev and 'dev' not in self.groups:
+            raise ValueError('Set a separate labeled DEV file to tune the threshold.')
+        if self.output.exists() and any(self.output.iterdir()):
+            raise FileExistsError('OUTPUT is not empty. Choose a new folder for each comparison.')
+        self._load()
+        self.output.mkdir(parents=True, exist_ok=True)
+        import importlib.metadata
+        settings = dict(mode='zero_shot_dev_threshold' if tune_on_dev else 'zero_shot',
+                        config=self.config, resolved_revision=self.revision, threshold=threshold,
+                        threshold_source='original dev' if tune_on_dev else 'fixed before inference',
+                        questions=self.questions, adapters=False, training=False, synthetic_samples=False,
+                        inputs={k: digest(v) for k, v in self.paths.items()},
+                        code_sha256=digest(HERE / 'run.py'),
+                        versions={p: importlib.metadata.version(p) for p in ('torch', 'transformers')},
+                        probability='Restricted A/B softmax; no domain calibration.', status='running')
+        save_json(self.output / 'settings.json', settings)
+        try:
+            scores = {}
+            if tune_on_dev:
+                scores['dev'] = self._predict('dev')
+                threshold = choose_threshold(self.groups['dev'], scores['dev'])
+                settings['threshold'] = threshold
+                save_json(self.output / 'settings.json', settings)
+            scores['data'] = self._predict('data')
+            self._write_predictions(scores, threshold)
+            metrics = {split: report(self.groups[split], values, threshold) for split, values in scores.items()}
+            metrics['protocol'] = dict(mode=settings['mode'], threshold=threshold,
+                                       selected_on=settings['threshold_source'], calibration='none',
+                                       task_training=False, adapter=False, synthetic_samples=False)
+            save_json(self.output / 'metrics.json', metrics)
+            settings['status'] = 'complete'
+            print(json.dumps(metrics['data'], indent=2))
+            print(f'Threshold: {threshold:.2f}; zero-shot results: {self.output}')
+            return metrics
+        except Exception as exc:
+            settings.update(status='failed', error=f'{type(exc).__name__}: {exc}')
+            raise
+        finally:
+            save_json(self.output / 'settings.json', settings)

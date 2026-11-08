@@ -186,6 +186,98 @@ class OpenJevDataTests(unittest.TestCase):
         self.assertEqual(clone[clone.index('--branch')+1], 'main')
         self.assertTrue(any('pull' in c and '--ff-only' in c for c in calls))
 
+    def test_zero_shot_loads_only_the_base_model(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+            config = make_config(Path(tmp))
+            job = run.ZeroShot(config['test'], output=config['output'])
+            base = SimpleNamespace(requires_grad_=unittest.mock.Mock(), eval=unittest.mock.Mock())
+            with patch.object(job, '_base', return_value=base) as loader:
+                job._load()
+                job._load()
+            loader.assert_called_once()
+            base.requires_grad_.assert_called_once_with(False)
+            base.eval.assert_called_once()
+            self.assertNotIn('train', job.groups)
+            self.assertNotIn('dev_synthetic', job.groups)
+            with self.assertRaises(RuntimeError):
+                job.train()
+
+    def test_zero_shot_fixed_threshold_outputs_and_unlabeled_input(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+            folder = Path(tmp)
+            config = make_config(folder)
+            job = run.ZeroShot(config['test'], output=config['output'])
+            job.revision = 'published-checkpoint'
+            scores = {k: 0.01 for k in run.IDENTITIES}
+            scores.update(a=0.9, scope=0.1)
+            with patch.object(job, '_load'), patch.object(job, '_predict', return_value=[scores]), \
+                    patch.object(run, 'choose_threshold', side_effect=AssertionError('Must not tune')), \
+                    patch('importlib.metadata.version', return_value='test-version'):
+                metrics = job.infer()
+            settings = json.loads((Path(config['output']) / 'settings.json').read_text())
+            self.assertEqual(settings['mode'], 'zero_shot')
+            self.assertEqual(settings['threshold'], 0.5)
+            self.assertFalse(settings['training'])
+            self.assertFalse(settings['adapters'])
+            self.assertEqual(metrics['data']['full_target_exact_match'], 1)
+            self.assertEqual({p.name for p in Path(config['output']).iterdir()},
+                             {'settings.json', 'predictions.csv', 'metrics.json'})
+            with (Path(config['output']) / 'predictions.csv').open(newline='') as f:
+                self.assertEqual(next(csv.DictReader(f))['target'], 'group_a')
+            # No gold is needed to construct tasks, build prompts or save scores.
+            with Path(config['test']).open(newline='') as f:
+                rows = list(csv.DictReader(f, delimiter='\t'))
+            fields = [k for k in rows[0] if k != 'target']
+            unlabeled = folder / 'unlabeled.tsv'
+            with unlabeled.open('w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fields, delimiter='\t', extrasaction='ignore')
+                writer.writeheader()
+                writer.writerows(rows)
+            other = run.ZeroShot(str(unlabeled), output=str(folder / 'unlabeled-results'))
+            self.assertEqual(len(other.tasks['data']), 10)
+            report = run.report(other.groups['data'], [scores], 0.5)
+            self.assertEqual(report['status'], 'not_evaluated')
+            self.assertEqual(report['coverage'], 1)
+
+    def test_zero_shot_dev_threshold_is_explicit_and_disjoint(self):
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+            config = make_config(Path(tmp))
+            with self.assertRaises(ValueError):
+                run.ZeroShot(config['dev'], dev=config['dev'])
+            job = run.ZeroShot(config['test'], output=config['output'], dev=config['dev'])
+            job.revision = 'published-checkpoint'
+            a = {k: 0.01 for k in run.IDENTITIES}
+            a.update(a=0.35, scope=0.1)
+            lg = {k: 0.01 for k in run.IDENTITIES}
+            lg.update(l=0.35, g=0.35, scope=0.9)
+            with patch.object(job, '_load'), \
+                    patch.object(job, '_predict', side_effect=lambda split: [lg if split == 'dev' else a]) as predictor, \
+                    patch('importlib.metadata.version', return_value='test-version'):
+                metrics = job.infer(tune_on_dev=True)
+            self.assertEqual([c.args[0] for c in predictor.call_args_list], ['dev', 'data'])
+            self.assertEqual(metrics['protocol']['mode'], 'zero_shot_dev_threshold')
+            self.assertLessEqual(metrics['protocol']['threshold'], 0.35)
+            self.assertEqual(metrics['data']['full_target_exact_match'], 1)
+
+    def test_inference_notebook_has_no_training_or_mount(self):
+        notebook = json.loads((ROOT / 'openjev/inference.ipynb').read_text(encoding='utf-8'))
+        codes = []
+        for i, cell in enumerate(notebook['cells']):
+            if cell['cell_type'] == 'code':
+                source = ''.join(cell['source'])
+                compile(source, f'inference-cell-{i}', 'exec')
+                self.assertIsNone(cell['execution_count'])
+                self.assertEqual(cell['outputs'], [])
+                codes.append(source)
+        text = '\n'.join(codes)
+        self.assertIn('BRANCH = "main"', text)
+        self.assertIn('run.ZeroShot(', text)
+        self.assertIn('THRESHOLD = 0.5', text)
+        self.assertIn('TUNE_ON_DEV = False', text)
+        self.assertNotIn('job.train(', text)
+        self.assertNotIn('drive.mount', text)
+        self.assertNotIn('TRAIN =', text)
+
 
 if __name__ == '__main__':
     unittest.main()
