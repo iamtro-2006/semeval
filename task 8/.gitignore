@@ -1,6 +1,7 @@
 # Keep supplied dataset and text-bearing model outputs private.
 data/raw/
 data/split/
+data/openjev/
 outputs/*/
 __pycache__/
 *.pyc

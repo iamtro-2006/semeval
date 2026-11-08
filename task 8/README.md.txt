@@ -76,3 +76,33 @@ the same pipeline; choose the mode, input fields and split, then enable
 New prediction files store `reasoning` instead of `evidence_json`; target metrics
 remain independent of schema diagnostics. See `PLAN.md` for the protocol.
 Run regression checks with `python -m unittest discover -s tests -v`.
+
+## OpenJev fine-tuning on Colab
+
+Open `openjev/train.ipynb`, or use:
+[Open in Colab](https://colab.research.google.com/github/iamtro-2006/semeval/blob/main/task%208/openjev/train.ipynb).
+
+The notebook clones `main` into `/content/semeval`, installs the training libraries,
+and accepts TRAIN, DEV, optional TEST, and OUTPUT paths. Upload TSV files directly
+to the session; no Drive mount or local GPU is needed. On Kaggle the clone uses
+`/kaggle/working/semeval`; enable Internet and set dataset paths accordingly.
+
+The four files in `openjev/` are `train.ipynb`, `run.py`, `questions.json` and
+`samples.json`. Fine-tuning uses BF16 LoRA on OpenJev Flash 9B, without quantizing
+the base weights. A GPU forward/backward and adapter save/reload check run in the
+notebook. Actual 9B GPU execution has not been validated on the local CPU machine.
+
+Synthetic examples are original fictional assistant-authored examples, not
+official annotations: four a-positive examples and two negative controls per
+train/dev split. They are added only in memory. Original dev determines checkpoint
+selection and one global identity threshold; synthetic dev is reported separately.
+Probabilities are restricted A/B softmax scores, without domain calibration.
+Empty identity selections are abstentions, counted as invalid targets rather than
+silently assigned none. Existing original split boundaries, including shared videos,
+are preserved and their overlap is reported.
+
+OUTPUT contains only `adapter/`, one `checkpoint/`, `settings.json`, `history.csv`,
+`predictions.csv`, and `metrics.json`. The final notebook cell exports these as a ZIP.
+Download it before the session ends. To resume, restore its contents into OUTPUT,
+keep the same settings/data/library versions/code and set RESUME=True. Test can be
+added later for final evaluation; it never selects the checkpoint or threshold.
