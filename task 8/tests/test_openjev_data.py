@@ -281,45 +281,58 @@ class OpenJevDataTests(unittest.TestCase):
         self.assertNotIn('job.train(', text)
         self.assertNotIn('drive.mount', text)
 
-    def test_few_shot_selection_excludes_evaluation_overlap_and_synthetic_rows(self):
-        train = []
-        for i in range(12):
-            train.append(dict(StereoQueerEval_id=f'demo_{i}', yt_title=f'Video {i}',
-                              yt_description=f'Description {i}', yt_comment=f'Comment {i}',
-                              target='individual_t' if i % 2 else 'group_g'))
-        evaluation = [train[0], {**train[1], 'StereoQueerEval_id': 'query_1', 'yt_title': 'Other'},
-                      {**train[2], 'StereoQueerEval_id': 'query_2', 'yt_comment': 'Other comment'}]
-        selected, summary = run.select_examples(train + self.rows, evaluation, self.questions, 4, 42)
-        self.assertEqual(summary, run.select_examples(train + self.rows, evaluation, self.questions, 4, 42)[1])
+    def test_few_shot_reuses_exact_original_examples_and_validates_provenance(self):
+        _, original = run.load_prompt(run.DEMO_PROMPT, 'few_shot')
+        train = [{**e['input'], run.ID_FIELD: e['source_id'], 'target': e['output']['target']}
+                 for e in original]
+        evaluation = [dict(StereoQueerEval_id='heldout', yt_title='Heldout title',
+                           yt_description='Heldout description', yt_comment='Heldout comment', target='group_a')]
+        selected, summary, source = run.load_examples(train + self.rows, evaluation, self.questions)
+        expected = ['training_EN_1613', 'training_EN_1776', 'training_EN_2450',
+                    'training_EN_1867', 'training_EN_0460', 'training_EN_0991']
+        self.assertEqual(source['source_ids'], expected)
+        self.assertEqual(source['video_overlap_exception_ids'], ['training_EN_0991'])
+        self.assertEqual(source['sha256'], run.digest(run.DEMO_PROMPT))
         for key, examples in selected.items():
-            self.assertEqual(len(examples), 4)
-            self.assertTrue(all(e['origin'] == 'original' for e in examples))
-            self.assertFalse({'demo_0', 'demo_1', 'demo_2'} & {e['source_id'] for e in examples})
-            self.assertFalse(any(e['source_id'].startswith('synthetic_') for e in examples))
-        self.assertEqual(summary['a']['answer_counts'], {'yes': 0, 'no': 4})
-        self.assertEqual(summary['scope']['answer_counts'], {'individual': 2, 'group': 2})
+            self.assertEqual([e['source_id'] for e in examples], expected)
+            for task, old in zip(examples, original):
+                self.assertEqual(task['state'], old['input'])
+                scope, codes = run.parse_target(old['output']['target'])
+                answer = (scope == 'individual') if key == 'scope' else key in codes
+                self.assertEqual(task['answer'], 0 if answer else 1)
+        self.assertEqual(summary['a']['answer_counts'], {'yes': 0, 'no': 6})
+        changed = copy.deepcopy(train)
+        changed[0]['yt_comment'] += ' modified'
         with self.assertRaises(ValueError):
-            run.select_examples(train, evaluation, self.questions, 0, 42)
+            run.load_examples(changed, evaluation, self.questions)
+        changed = copy.deepcopy(train)
+        changed[0]['target'] = 'group_t'
         with self.assertRaises(ValueError):
-            run.select_examples(train, evaluation, self.questions, 100, 42)
+            run.load_examples(changed, evaluation, self.questions)
+        with self.assertRaises(ValueError):
+            run.load_examples(train, [train[0]], self.questions)
+        # Only the explicitly declared historical video exception remains allowed.
+        video_only = {**train[-1], run.ID_FIELD: 'other_id', 'yt_comment': 'Other heldout comment'}
+        run.load_examples(train, [video_only], self.questions)
+        forbidden_video = {**train[0], run.ID_FIELD: 'other_id', 'yt_comment': 'Other heldout comment'}
+        with self.assertRaises(ValueError):
+            run.load_examples(train, [forbidden_video], self.questions)
 
     def test_few_shot_messages_and_saved_mode_use_train_answers_only(self):
         with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
             config = make_config(Path(tmp))
-            train = []
-            for i in range(6):
-                train.append(dict(StereoQueerEval_id=f'demo_{i}', yt_title=f'Train video {i}',
-                                  yt_description=f'Train description {i}', yt_comment=f'Train comment {i}',
-                                  target='individual_t' if i % 2 else 'group_g'))
-            with Path(config['train']).open('w', newline='') as f:
+            _, original = run.load_prompt(run.DEMO_PROMPT, 'few_shot')
+            train = [{**e['input'], run.ID_FIELD: e['source_id'], 'target': e['output']['target']}
+                     for e in original]
+            with Path(config['train']).open('w', encoding='utf-8', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=list(train[0]), delimiter='\t')
                 writer.writeheader()
                 writer.writerows(train)
-            job = run.FewShot(config['test'], train=config['train'], shots=4, output=config['output'])
+            job = run.FewShot(config['test'], train=config['train'], output=config['output'])
             task = job.tasks['data'][0]
             messages = job._messages(task)
-            self.assertEqual(len(messages), 9)
-            self.assertEqual([m['role'] for m in messages], ['user', 'assistant'] * 4 + ['user'])
+            self.assertEqual(len(messages), 13)
+            self.assertEqual([m['role'] for m in messages], ['user', 'assistant'] * 6 + ['user'])
             for j, example in enumerate(job.examples[task['key']]):
                 self.assertEqual(messages[2*j+1]['content'], 'AB'[example['answer']])
             self.assertEqual(messages, job._messages({**task, 'answer': 1-task['answer']}))

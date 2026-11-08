@@ -14,8 +14,10 @@ import random
 import sys
 
 HERE = Path(__file__).resolve().parent
+DEMO_PROMPT = HERE.parent / 'src/prompts/comment_title_desc/fs_prompt.md'
 sys.path.insert(0, str(HERE.parent / 'src'))
-from inference import ID_FIELD, canonical_gold, evaluate, read_tsv
+from inference import (ID_FIELD, canonical_gold, evaluate, load_prompt, read_tsv,
+                       validate_demonstrations)
 from metrics import IDENTITIES, parse_target
 
 DEFAULTS = dict(model='openjev/OpenJev-Flash-9B', revision='main',
@@ -152,46 +154,29 @@ def order_for(seed, epoch, task):
     return bool(hashlib.sha256(identity.encode()).digest()[0] % 2)
 
 
-def select_examples(train_rows, evaluation_rows, questions, shots, seed):
-    """Select short, question-specific train examples, balancing A/B where possible."""
-    if type(shots) is not int or shots < 1:
-        raise ValueError('SHOTS must be a positive integer.')
-    ids = {r[ID_FIELD] for r in evaluation_rows}
-    comments = {' '.join(r['yt_comment'].casefold().split()) for r in evaluation_rows}
-    videos = {(r['yt_title'].casefold().strip(), r['yt_description'].casefold().strip())
-              for r in evaluation_rows}
-    pool = []
-    for row in train_rows:
-        if not row.get('target'):
-            raise ValueError('Few-shot TRAIN must contain gold target labels.')
-        if row[ID_FIELD].startswith('synthetic_') or row.get('origin') == 'synthetic':
-            continue
-        video = (row['yt_title'].casefold().strip(), row['yt_description'].casefold().strip())
-        if (row[ID_FIELD] not in ids and ' '.join(row['yt_comment'].casefold().split()) not in comments
-                and video not in videos):
-            pool.append({**row, 'split': 'train', 'origin': 'original'})
-    random.Random(seed).shuffle(pool)
-    # Stable sorting keeps randomized tie order and favors shorter context windows.
-    pool.sort(key=lambda r: sum(len(r[k]) for k in questions['state_fields']))
-    candidates = {key: [] for key in (*IDENTITIES, 'scope')}
-    for task in decisions(pool, questions):
-        candidates[task['key']].append(task)
-    selected, summary = {}, {}
-    for key, tasks in candidates.items():
-        if len(tasks) < shots:
-            raise ValueError(f'Only {len(tasks)} eligible train examples for {key}; '
-                             f'need {shots}. Reduce SHOTS or check train/evaluation overlap.')
-        picked = []
-        for answer in (0, 1):
-            picked.extend([t for t in tasks if t['answer'] == answer][:shots//2])
-        used = {t['source_id'] for t in picked}
-        picked.extend([t for t in tasks if t['source_id'] not in used][:shots-len(picked)])
-        random.Random(f'{seed}:{key}').shuffle(picked)
-        selected[key] = picked
-        summary[key] = dict(source_ids=[t['source_id'] for t in picked],
-                            answer_counts={label: sum(t['answer'] == i for t in picked)
-                                           for i, (label, _) in enumerate(picked[0]['options'])})
-    return selected, summary
+def load_examples(train_rows, evaluation_rows, questions, path=DEMO_PROMPT):
+    """Use every example from the existing three-field prompt, in its exact order."""
+    _, examples = load_prompt(Path(path), 'few_shot')
+    if not examples:
+        raise ValueError('The original few-shot prompt has no examples.')
+    validate_demonstrations(examples, train_rows, evaluation_rows, 'comment_title_desc')
+    rows = [{**example['input'], ID_FIELD: example['source_id'],
+             'target': example['output']['target'], 'split': 'train', 'origin': 'original'}
+            for example in examples]
+    selected = {key: [] for key in (*IDENTITIES, 'scope')}
+    for task in decisions(rows, questions):
+        selected[task['key']].append(task)
+    summary = {}
+    for key, tasks in selected.items():
+        summary[key] = dict(source_ids=[t['source_id'] for t in tasks],
+                            answer_counts={label: sum(t['answer'] == i for t in tasks)
+                                           for i, (label, _) in enumerate(tasks[0]['options'])})
+    source = dict(prompt='src/prompts/comment_title_desc/fs_prompt.md', sha256=digest(path),
+                  source_ids=[example['source_id'] for example in examples],
+                  targets=[example['output']['target'] for example in examples],
+                  video_overlap_exception_ids=[example['source_id'] for example in examples
+                                               if example.get('allow_video_overlap') is True])
+    return selected, summary, source
 
 
 def decode(probabilities, threshold):
@@ -626,6 +611,7 @@ class ZeroShot(Run):
                         questions=self.questions, adapters=False, training=False, synthetic_samples=False,
                         inputs={k: digest(v) for k, v in self.paths.items()},
                         examples=getattr(self, 'example_summary', {}),
+                        example_source=getattr(self, 'example_source', None),
                         code_sha256=digest(HERE / 'run.py'),
                         versions={p: importlib.metadata.version(p) for p in ('torch', 'transformers')},
                         probability='Restricted A/B softmax; no domain calibration.', status='running')
@@ -659,7 +645,7 @@ class FewShot(ZeroShot):
     """In-context demonstrations from original train; published weights stay frozen."""
     mode = 'few_shot'
 
-    def __init__(self, data, train, output='/content/few-shot', dev='', shots=4, **options):
+    def __init__(self, data, train, output='/content/few-shot', dev='', **options):
         super().__init__(data, output=output, dev=dev, **options)
         path = Path(train).expanduser().resolve()
         if not train or not path.is_file():
@@ -667,12 +653,13 @@ class FewShot(ZeroShot):
         if path == self.output or self.output in path.parents:
             raise ValueError('Keep OUTPUT separate from dataset files.')
         evaluation_rows = [row for rows in self.groups.values() for row in rows]
-        self.examples, self.example_summary = select_examples(
-            read_tsv(path), evaluation_rows, self.questions, shots, self.config['seed'])
+        self.examples, self.example_summary, self.example_source = load_examples(
+            read_tsv(path), evaluation_rows, self.questions, path=DEMO_PROMPT)
         self.paths['train'] = path
-        self.config['shots'] = shots
+        self.paths['demo_prompt'] = DEMO_PROMPT
+        self.config['shots'] = len(self.example_source['source_ids'])
         print(json.dumps(self.example_summary, indent=2))
-        print('Example counts are per question. Missing positive labels are not fabricated.')
+        print('Using all examples from the original comment_title_desc prompt in the original order.')
 
     def _messages(self, task, reverse=False):
         messages = []

@@ -122,17 +122,24 @@ Upload the original local splits from `data/split/en`, keeping the filenames:
 
 Choose MODE="zero_shot" or MODE="few_shot". Both use the published BF16 checkpoint,
 without task fine-tuning, adapters or boosting. DATA defaults to the original val
-file; few-shot additionally reads the original train file, with SHOTS=4 examples
-per question. Synthetic samples and previously generated augmented TSVs are not
+file; few-shot additionally reads the original train file, using all six examples
+from the existing three-field Qwen prompt for every question. Synthetic samples and previously generated augmented TSVs are not
 used by this inference notebook. Original train has no positive a examples; this
 limitation is shown in the demonstration counts instead of inventing positives.
 
-Few-shot uses user/assistant demonstrations answering the same identity/scope
-question with A/B. Selection is deterministic, favors short examples, and balances
-answers where eligible positives/negatives exist. Examples overlapping DATA or DEV
-by ID, normalized comment or video are excluded. This can leave no positive
-examples for some rare identities. settings.json records source IDs, answer counts,
-train hash and mode; it does not publish the example texts.
+Few-shot reads every example directly from
+`src/prompts/comment_title_desc/fs_prompt.md`, preserving all six source IDs, input
+text, gold targets and their order. It only converts each example's target into
+an A/B answer for the corresponding identity/scope question. It does not select,
+rebalance, shuffle, replace or generate demonstrations. There is no SHOTS setting.
+The old examples cover l/g/b/t/lgbtqia+, with no a/q/i/nb positives. The umbrella
+label is not treated as an a-positive label.
+
+The same provenance, text/gold and overlap validator as Qwen checks examples
+against TRAIN and DATA/DEV. The existing video-overlap exception for
+training_EN_0991 is preserved and recorded; no ID/comment overlap is allowed.
+settings.json records the source prompt hash, train hash, ordered IDs, targets,
+answer counts and declared video exception. The original prompt is not modified.
 
 The default threshold is fixed at 0.5. DATA may omit target labels: predictions
 are still saved, but metrics are marked not_evaluated. Optionally enable TUNE_ON_DEV
