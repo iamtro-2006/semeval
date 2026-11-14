@@ -109,15 +109,15 @@ Restart the runtime if requested, then rerun clone/setup. GPU training has not b
 !nvidia-smi
 ''')] + storage + data_setup + [md('''## Experiment settings
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
-Periodic checkpoints upload after each save; final adapter uploads after training finishes.
-Local SSD is used for training and inference. A disconnected runtime can only recover checkpoints already uploaded.
+Intermediate checkpoints stay on local SSD; only the selected final adapter uploads after successful training.
+Local SSD is used for training and inference. If the runtime is lost before the final upload, local checkpoints cannot be recovered from Drive.
 Default: native BF16 LoRA, CUDA FP16 mmBERT; GRPO uses vLLM colocate with sleep enabled.
 SFT's optional in-training generation monitor uses the native ms-swift Transformers path.
 Final validation/test inference uses vLLM. This is an unbenchmarked 24 GB starting configuration.
 '''), code('''import json
 USE_4BIT = False
 PREDICT_WITH_GENERATE = False  # default SFT: val loss + token accuracy; True: generation + mmBERT
-RUN_FULL = False
+RUN_FULL = True  # full training from YAML; False explicitly selects a one-step smoke run
 RUN_NAME = 'experiment01'
 if not re.fullmatch(r'[A-Za-z0-9_-]+', RUN_NAME):
     raise ValueError('RUN_NAME must contain only letters, numbers, underscores or hyphens')
@@ -130,18 +130,20 @@ GRPO = str(RUNS / GRPO_STAGE)
 common = {'model.dtype': 'bfloat16', 'model.load_in_4bit': USE_4BIT,
           'training.predict_with_generate': PREDICT_WITH_GENERATE}
 
+def upload_run(local_output, cloud_subdir):
+    # Never upload intermediate checkpoints, including during final validation sync.
+    copy(local_output, cloud(cloud_subdir),
+         '--exclude', '/checkpoint-*', '--exclude', '/checkpoint-*/**',
+         '--exclude', '/swift_data/**')
+
 def run(module, config, overrides, local_output, cloud_subdir):
     cmd = [sys.executable, '-m', module, '--config', config]
     for key, value in overrides.items():
         cmd += ['--set', f'{key}={json.dumps(value)}']
-    env = dict(os.environ)
-    env.update(MMCQA_RCLONE_CONFIG=str(config_path), MMCQA_DRIVE_ROOT_ID=root_id,
-               MMCQA_SYNC_DESTINATION=cloud(cloud_subdir))
-    result = subprocess.run(cmd, env=env)
-    # Also preserve final adapter and logs, including after a failed training subprocess.
-    if Path(local_output).exists():
-        copy(local_output, cloud(cloud_subdir))
-    result.check_returncode()
+    subprocess.run(cmd, check=True)
+    if not (Path(local_output) / 'final/adapter_config.json').is_file():
+        raise FileNotFoundError('Training finished without a final adapter; nothing uploaded')
+    upload_run(local_output, cloud_subdir)
 ''')]
 
 transfer = setup + storage + [md('''## Download English QA and upload automatically below MMCQA
@@ -159,12 +161,13 @@ print('Dataset ready under MMCQA/task6-data/raw')
 
 sft_notebook = gpu_setup + [md('''## SFT only · ms-swift + PEFT
 Default PREDICT_WITH_GENERATE=False: monitor teacher-forced loss and token accuracy.
+Full training runs 3 epochs and exports the best validation checkpoint as final/.
 True: native ms-swift generation evaluation with mmBERT P/R/F1 plugin; select best by F1.
 Generation evaluation replaces the teacher-forced validation pass; it does not report val loss simultaneously.
 Edit SFT_OVERRIDES for prompt and training parameters. For same-stage resume, set
-RESUME_CHECKPOINT to checkpoint-N already saved under this run on Drive.
+RESUME_CHECKPOINT to checkpoint-N only if you manually backed it up to Drive; automatic uploads contain final adapters only.
 '''), code('''SFT_OVERRIDES = {}  # e.g. {'training.learning_rate': 0.0001, 'prompt_file': 'prompts/qa.txt'}
-RESUME_CHECKPOINT = ''  # e.g. checkpoint-100; leave empty for a fresh run
+RESUME_CHECKPOINT = ''  # manually backed-up checkpoint-N only; final/ is not a resumable checkpoint
 sft_args = {**common, 'training.output_dir': SFT}
 if not RUN_FULL:
     sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',
@@ -181,27 +184,32 @@ print('Notebook 03: select the same ROOT_FOLDER_ID, SFT_RUN_NAME and INPUT_SFT_S
 ''')]
 
 grpo_notebook = gpu_setup + [md('''## GRPO only · ms-swift + PEFT
-Training always generates rollouts. PREDICT_WITH_GENERATE=False disables extra validation rollouts.
-True enables native ms-swift validation rollout evaluation at eval_steps: inspect
+Full GRPO training defaults to 1 epoch, with validation and checkpoint saving every 170 optimizer steps.
+Validation rollouts are enabled independently of the SFT flag. Increasing epochs preserves best selection.
+Select the highest validation reward checkpoint and export it as final/. Inspect
 eval_rewards/MMCQABERTScore/mean for raw mmBERT F1 (sampled responses, not teacher-forced accuracy).
 GRPO does not have the supervised token-loss/accuracy semantics of SFT.
+The explicit RUN_FULL=False smoke path disables periodic validation and best selection.
 Paths are automatically derived from MMCQA root. This notebook never trains SFT.
 A full GRPO experiment should use a full SFT checkpoint, not a smoke adapter.
 '''), code('''SFT_RUN_NAME = RUN_NAME
 INPUT_SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
 SFT_CHECKPOINT = 'final'  # or checkpoint-N
 GRPO_OVERRIDES = {}  # e.g. {'reward.device': 'cuda', 'training.learning_rate': 0.000005}
-RESUME_CHECKPOINT = ''  # GRPO checkpoint-N in this output run, for same-stage resume
+RESUME_CHECKPOINT = ''  # manually backed-up GRPO checkpoint-N only
 local_adapter = Path('outputs/inputs/sft') / SFT_RUN_NAME / INPUT_SFT_STAGE / SFT_CHECKPOINT
 copy(cloud(f'task6-runs/{SFT_RUN_NAME}/{INPUT_SFT_STAGE}/{SFT_CHECKPOINT}'), local_adapter)
 if not (local_adapter / 'adapter_config.json').is_file():
     raise FileNotFoundError('SFT adapter not found. Check the selected run/stage/checkpoint.')
 if not any((local_adapter / name).is_file() for name in ['adapter_model.safetensors', 'adapter_model.bin']):
     raise FileNotFoundError('SFT weights missing; complete SFT save/upload first')
-grpo_args = {**common, 'model.adapter': str(local_adapter), 'model.adapter_revision': None,
+grpo_args = {**common, 'training.predict_with_generate': True,
+             'model.adapter': str(local_adapter), 'model.adapter_revision': None,
              'training.output_dir': GRPO}
 if not RUN_FULL:
-    grpo_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.save_steps': 1})
+    grpo_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.save_steps': 1,
+                      'training.eval_strategy': 'no', 'training.predict_with_generate': False,
+                      'training.load_best_model_at_end': False})
 if RESUME_CHECKPOINT:
     copy(cloud(f'task6-runs/{RUN_NAME}/{GRPO_STAGE}'), GRPO)
     grpo_args['resume_from_checkpoint'] = str(Path(GRPO) / RESUME_CHECKPOINT)
@@ -225,11 +233,23 @@ cmd += ['--backend', 'transformers' if USE_4BIT else 'vllm']
 if VAL_LIMIT is not None:
     cmd += ['--limit', str(VAL_LIMIT)]
 result = subprocess.run(cmd)
-copy(validation_run, cloud(f'task6-runs/{RUN_NAME}/{__STAGE__}'))
+upload_run(validation_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 result.check_returncode()
 '''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable))]
 
+def learning_curves(run_variable, stage_variable, label):
+    return [md('''## Learning curves before final evaluation
+Plot native training/validation metrics against optimizer step, then upload the PNG to Drive.
+Validation points appear only at completed evaluation intervals; no interpolation or smoothing.
+'''), code('''from mmcultureqa.training.curves import plot_learning_curves
+plot_learning_curves(__RUN_DIR__, '__LABEL__')
+upload_run(__RUN_DIR__, f'task6-runs/{RUN_NAME}/{__STAGE__}')
+'''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable).replace('__LABEL__', label))]
+
+
+sft_notebook += learning_curves('SFT', 'SFT_STAGE', 'sft')
 sft_notebook += final_validation('SFT', 'SFT_STAGE')
+grpo_notebook += learning_curves('GRPO', 'GRPO_STAGE', 'grpo')
 grpo_notebook += final_validation('GRPO', 'GRPO_STAGE')
 
 inference_notebook = gpu_setup + [md('''## Test inference only

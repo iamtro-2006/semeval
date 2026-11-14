@@ -89,7 +89,9 @@ def build_arguments(cfg, stage):
                 args[key] = tc[key]
         args.update(rlhf_type='grpo', reward_funcs=['mmcqa_bertscore' if cfg['reward']['type'] == 'mmbert' else 'mmcqa_exact'],
                     overlong_filter=tc.get('mask_truncated_completions', True),
-                    load_best_model_at_end=False, metric_for_best_model='reward', greater_is_better=True)
+                    load_best_model_at_end=generate and tc.get('load_best_model_at_end', True),
+                    metric_for_best_model=('rewards/MMCQABERTScore/mean' if cfg['reward']['type'] == 'mmbert'
+                                           else 'rewards/MMCQAExact/mean'), greater_is_better=True)
         args['eval_strategy'] = (tc['eval_strategy'] if tc['eval_strategy'] != 'no' else 'steps') if generate else 'no'
         if args.get('beta', 0) > 0:
             args['ref_adapters'] = args['adapters']

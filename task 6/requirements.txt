@@ -17,6 +17,7 @@ PyYAML==6.0.3
 bitsandbytes==0.48.2; platform_system == "Linux"
 bert-score==0.3.12
 numpy<2
+matplotlib>=3.8,<4
 sacrebleu==2.5.1
 rouge-score==0.1.2
 sentencepiece==0.2.1

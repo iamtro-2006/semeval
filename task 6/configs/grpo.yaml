@@ -4,10 +4,15 @@ model:
 training:
   output_dir: outputs/grpo
   num_train_epochs: 1
+  eval_steps: 170
+  save_steps: 170
   learning_rate: 0.000005
   gradient_accumulation_steps: 4
-  eval_strategy: 'no'
-  load_best_model_at_end: false
+  eval_strategy: steps
+  predict_with_generate: true
+  load_best_model_at_end: true
+  metric_for_best_model: rewards/MMCQABERTScore/mean
+  greater_is_better: true
   num_generations: 4
   max_prompt_length: null
   max_completion_length: 256

@@ -34,7 +34,7 @@ MMCQA/                           ← ROOT_FOLDER_ID
 
 Mỗi notebook clone repo `iamtro-2006/semeval` và cài package trong `task 6/`. Không ZIP/upload code. Dùng cùng `ROOT_FOLDER_ID` trong các phiên để đồng bộ. File rclone gốc không bị sửa; dùng bản sao tạm để refresh token. Nếu config nằm trên Drive thì chạy cell mount tùy chọn chỉ để đọc config.
 
-`RUN_FULL=False` mặc định chạy thử một optimizer step; full run dùng tên experiment mới và `RUN_FULL=True`. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'`, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
+`RUN_FULL=False` mặc định chạy thử một optimizer step; full run dùng tên experiment mới và `RUN_FULL=True`. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'` chỉ khi đã tự sao lưu checkpoint đầy đủ lên Drive, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
 
 Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT mặc định chọn checkpoint bằng val loss; bật generation thì chọn bằng val BERTScore-F1. GRPO giữ checkpoint cuối và log reward theo cơ chế ms-swift.
 
@@ -47,7 +47,7 @@ python -m mmcultureqa.evaluate --run-dir outputs/grpo
 
 Evaluator dùng prompt/model settings đã lưu trong `run.json`, kiểm tra manifest không đổi và train/val không trùng ID/ảnh, sinh đáp án rồi chấm scorer trong hai subprocess để giải phóng VRAM giữa VLM và mmBERT. Chỉ đọc gold để chấm; gold không đưa vào prompt.
 
-Training và ảnh dùng SSD local; rclone copy checkpoint theo lịch save và cuối stage. Nếu Colab bị ngắt đột ngột, chỉ checkpoint đã upload xong mới phục hồi được. Remote dùng `copy`, không xóa checkpoint cũ trên Drive; save_total_limit chỉ giới hạn bản local. CLI ngoài notebook vẫn hoạt động bình thường, không sync nếu không cấu hình môi trường callback.
+Training và ảnh dùng SSD local; checkpoint trung gian chỉ lưu local; rclone chỉ upload adapter `final` cùng metadata/log/kết quả đánh giá sau khi train thành công. Nếu Colab mất runtime trước khi upload cuối hoàn tất, checkpoint local không có trên Drive để phục hồi. `final` của SFT full run là best theo validation; GRPO giữ bản cuối như cấu hình hiện tại. Remote dùng `copy`, không xóa checkpoint cũ đã upload từ trước; save_total_limit chỉ giới hạn bản local. Upload cuối và sync validation đều loại `checkpoint-*` và `swift_data`. CLI ngoài notebook vẫn hoạt động bình thường, không sync nếu không cấu hình môi trường callback.
 
 Sửa notebook generator rồi sinh lại:
 
@@ -124,14 +124,18 @@ Mặc định cả YAML và notebook dùng **BF16, không 4-bit** (`USE_4BIT=Fal
 
 ## Monitoring theo ms-swift
 
-Trong notebook dùng `PREDICT_WITH_GENERATE=False` (mặc định); CLI dùng `training.predict_with_generate`.
+SFT mặc định `PREDICT_WITH_GENERATE=False`; GRPO bật validation rollout riêng. CLI dùng `training.predict_with_generate`.
+
+Full run mặc định: SFT 3 epoch, GRPO 1 epoch; cả hai đánh giá và lưu checkpoint mỗi 170 optimizer step. SFT chọn val loss thấp nhất, GRPO chọn val reward cao nhất rồi xuất adapter đó vào `final/`. Tăng epoch vẫn giữ cơ chế chọn tốt nhất. `RUN_FULL=False` chỉ dành cho smoke một bước, không chọn checkpoint theo validation.
+
+Cả hai notebook vẽ đường cong theo optimizer step trước bước đánh giá cuối: SFT train/val loss, GRPO train/val reward. Biểu đồ lưu thành `learning_curves.png` trong thư mục run và upload lên Drive. Nếu chưa tới kỳ evaluation thì chưa có điểm validation để vẽ.
 
 | Stage/chế độ | Monitor định kỳ | Chọn checkpoint |
 |---|---|---|
 | SFT, False | train loss/token_acc; val loss/token_acc mỗi eval_steps | val loss thấp nhất |
 | SFT, True | train loss/token_acc; sinh đáp án val và eval_bertscore_precision/recall/f1 | val BERTScore-F1 cao nhất |
 | GRPO, False | loss/reward và thống kê rollout train của ms-swift | checkpoint cuối |
-| GRPO, True | thêm rollout val; eval_rewards/MMCQABERTScore/mean khi reward.type=mmbert | checkpoint cuối |
+| GRPO, True (mặc định GRPO) | thêm rollout val; eval_rewards/MMCQABERTScore/mean khi reward.type=mmbert | val reward cao nhất |
 
 SFT generation evaluation thay thế lượt teacher-forcing validation của framework: không hứa có val loss đồng thời trong cùng lượt. Token accuracy không phải điểm QA tự sinh. GRPO luôn sinh rollout khi train dù flag False; không có cách hiểu token accuracy/val loss giống SFT. Điểm reward val của GRPO là trên các đáp án sampled theo cấu hình rollout, không phải phép chấm greedy cuối. Với reward exact, tên metric tương ứng là MMCQAExact, không gọi đó là BERTScore.
 
@@ -166,7 +170,7 @@ Các knobs trong YAML vẫn chỉnh được. Khi chọn 4-bit ở notebook, sta
 - beta mặc định 0. Nếu bật beta>0 cho GRPO, cấu hình ref_adapters cùng adapter SFT theo tài liệu ms-swift để KL tham chiếu SFT, không phải base trước SFT.
 - Plugin mmBERT pin model/revision/layer, IDF off, no rescaling, fast tokenizer và giới hạn 512. Empty answer nhận 0. Scorer cache theo cấu hình để tránh tải lại mỗi batch. Giữ nguyên scorer cuối chính thức trong vendor.
 - native arguments được lưu trong swift_arguments.json. Khóa `swift` trong YAML cho phép override trực tiếp các tham số TrainArguments/RLHFArguments; framework sẽ báo lỗi nếu tên tham số không hợp lệ. Cấu hình native override có quyền ưu tiên, vì vậy chỉ đổi khi hiểu tác động.
-- Adapter/checkpoint được ms-swift lưu; hook project chỉ chuẩn hóa base-model identifier trong metadata và đồng bộ Drive. Adapter `final` không chứa base weights. Checkpoint có optimizer/scheduler dùng để resume cùng stage.
+- Adapter/checkpoint được ms-swift lưu; hook project chỉ chuẩn hóa base-model identifier trong metadata và đồng bộ Drive sau khi train thành công qua notebook launcher. Adapter `final` không chứa base weights. Checkpoint có optimizer/scheduler dùng để resume cùng stage.
 - Final validation và standalone test inference mặc định dùng VllmEngine của ms-swift, cùng pinned base revision và LoRA. Backend Transformers vẫn chọn được qua inference.backend. SFT generation monitor trong lúc train vẫn dùng Transformers theo cơ chế native ms-swift; vLLM tăng tốc rollout GRPO và inference ngoài train.
 
 ## Dùng adapter SFT đã công bố
