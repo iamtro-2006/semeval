@@ -84,7 +84,7 @@ def provenance(cfg, folder):
     out.mkdir(parents=True, exist_ok=True)
     report = copy.deepcopy(cfg)
     report['prompt_text'] = path(cfg['prompt_file']).read_text(encoding='utf-8')
-    report['versions'] = {k: importlib.metadata.version(k) for k in ['torch', 'transformers', 'trl', 'peft']}
+    report['versions'] = {k: importlib.metadata.version(k) for k in ['torch', 'transformers', 'trl', 'peft', 'ms-swift']}
     report['manifests'] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                            for p in path(cfg['data']['manifest_dir']).glob('*.jsonl')}
     (out / 'run.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

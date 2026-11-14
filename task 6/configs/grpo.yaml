@@ -17,7 +17,6 @@ training:
   loss_type: dr_grpo
   mask_truncated_completions: true
   use_vllm: false
-  generation_kwargs: {use_cache: true}
 reward:
   type: mmbert
   model: jhu-clsp/mmBERT-base

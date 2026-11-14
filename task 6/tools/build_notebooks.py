@@ -113,6 +113,7 @@ Periodic checkpoints upload after each save; final adapter uploads after trainin
 Local SSD is used for training and inference. A disconnected runtime can only recover checkpoints already uploaded.
 '''), code('''import json
 USE_4BIT = True
+PREDICT_WITH_GENERATE = False  # default SFT: val loss + token accuracy; True: generation + mmBERT
 RUN_FULL = False
 RUN_NAME = 'experiment01'
 if not re.fullmatch(r'[A-Za-z0-9_-]+', RUN_NAME):
@@ -123,7 +124,7 @@ SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
 GRPO_STAGE = 'grpo' if RUN_FULL else 'grpo-smoke'
 SFT = str(RUNS / SFT_STAGE)
 GRPO = str(RUNS / GRPO_STAGE)
-common = {'model.load_in_4bit': USE_4BIT}
+common = {'model.load_in_4bit': USE_4BIT, 'training.predict_with_generate': PREDICT_WITH_GENERATE}
 
 def run(module, config, overrides, local_output, cloud_subdir):
     cmd = [sys.executable, '-m', module, '--config', config]
@@ -152,7 +153,10 @@ subprocess.run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
 print('Dataset ready under MMCQA/task6-data/raw')
 ''')]
 
-sft_notebook = gpu_setup + [md('''## SFT only
+sft_notebook = gpu_setup + [md('''## SFT only · ms-swift + PEFT
+Default PREDICT_WITH_GENERATE=False: monitor teacher-forced loss and token accuracy.
+True: native ms-swift generation evaluation with mmBERT P/R/F1 plugin; select best by F1.
+Generation evaluation replaces the teacher-forced validation pass; it does not report val loss simultaneously.
 Edit SFT_OVERRIDES for prompt and training parameters. For same-stage resume, set
 RESUME_CHECKPOINT to checkpoint-N already saved under this run on Drive.
 '''), code('''SFT_OVERRIDES = {}  # e.g. {'training.learning_rate': 0.0001, 'prompt_file': 'prompts/qa.txt'}
@@ -172,7 +176,11 @@ print('SFT adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}/final')
 print('Notebook 03: select the same ROOT_FOLDER_ID, SFT_RUN_NAME and INPUT_SFT_STAGE.')
 ''')]
 
-grpo_notebook = gpu_setup + [md('''## GRPO only: select SFT input by run name
+grpo_notebook = gpu_setup + [md('''## GRPO only · ms-swift + PEFT
+Training always generates rollouts. PREDICT_WITH_GENERATE=False disables extra validation rollouts.
+True enables native ms-swift validation rollout evaluation at eval_steps: inspect
+eval_rewards/MMCQABERTScore/mean for raw mmBERT F1 (sampled responses, not teacher-forced accuracy).
+GRPO does not have the supervised token-loss/accuracy semantics of SFT.
 Paths are automatically derived from MMCQA root. This notebook never trains SFT.
 A full GRPO experiment should use a full SFT checkpoint, not a smoke adapter.
 '''), code('''SFT_RUN_NAME = RUN_NAME

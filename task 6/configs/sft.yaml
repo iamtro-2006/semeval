@@ -49,4 +49,15 @@ training:
   dataloader_pin_memory: true
   report_to: none
   seed: 42
+  predict_with_generate: false
+  acc_strategy: token
+monitor:
+  model: jhu-clsp/mmBERT-base
+  revision: c5955035435e2bf121cde7f3c8863ef52ff35d82
+  num_layers: 17
+  device: cpu
+  batch_size: 16
+  limit: null
+  max_new_tokens: 256
+swift: {}  # optional native ms-swift TrainArguments/RLHFArguments overrides
 resume_from_checkpoint: null

@@ -12,4 +12,14 @@
 - Official scorer source: https://github.com/mmcultureqa-semeval27/mmcultureqa/tree/main/scorer (copied snapshot provenance in vendor/organizer/PROVENANCE.md)
 - rclone Drive setup: https://rclone.org/drive/ ; copy: https://rclone.org/commands/rclone_copy/
 
-SFT deliberately uses a small custom multimodal collator plus Transformers Trainer, so answer-only masking is explicit and verified against the actual native chat template. GRPO delegates policy loss, rollout grouping, sampling and gradient accumulation to TRL rather than reimplementing RL. All parameters are configuration-driven. Version pinning and source inspection are not a substitute for the provided GPU smoke experiment.
+Training backend migrated to ms-swift **v3.11.3**, source commit `96d08aa09907e4e828ab4e13e157cf406994b817`:
+
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/llm/train/sft.py
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/llm/train/rlhf.py
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/trainers/trainers.py
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/plugin/metric.py
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/plugin/orm.py
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/trainers/rlhf_trainer/grpo_trainer.py
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/requirements/framework.txt
+
+The pinned version supports Qwen3-VL and constrains transformers<4.58, trl<0.25, peft<0.19, datasets<4. Dependency pins follow those constraints (datasets changed to 3.6.0). Metric/reward plugins use v3.11.3's metric_mapping and orms, not the different 4.x plugin API. Native ms-swift owns templates, masking, optimizer, accumulation, rollout, loss and evaluation. SFT without generation is the default. No GPU execution has been completed locally.
