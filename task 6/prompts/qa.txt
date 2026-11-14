@@ -1,0 +1,3 @@
+Answer the question using the image and relevant cultural knowledge. Give a direct, accurate answer in English.
+
+Question: {question}

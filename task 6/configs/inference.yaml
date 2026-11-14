@@ -1,0 +1,10 @@
+extends: configs/sft.yaml
+model:
+  adapter: outputs/sft/final
+inference:
+  split: dev
+  batch_size: 1
+  max_new_tokens: 256
+  do_sample: false
+  output: outputs/predictions/sft_dev.jsonl
+  resume: true

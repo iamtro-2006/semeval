@@ -1,0 +1,60 @@
+{
+  "source": "QCRI/MMCQA-SemEval27",
+  "revision": "e850ede73e2f1ef3dde12e0210de67d107247ef0",
+  "seed": 42,
+  "splits": {
+    "train": {
+      "rows": 10000,
+      "fields": [
+        "answer",
+        "id",
+        "image",
+        "question"
+      ],
+      "labelled": 10000,
+      "unique_images": 10000,
+      "min_width": 150,
+      "max_width": 2730,
+      "archive_bytes": 1748676932
+    },
+    "dev": {
+      "rows": 1000,
+      "fields": [
+        "answer",
+        "id",
+        "image",
+        "question"
+      ],
+      "labelled": 1000,
+      "unique_images": 1000,
+      "min_width": 150,
+      "max_width": 2048,
+      "archive_bytes": 182697719
+    },
+    "devtest": {
+      "rows": 1000,
+      "fields": [
+        "id",
+        "image",
+        "question"
+      ],
+      "labelled": 0,
+      "unique_images": 1000,
+      "min_width": 480,
+      "max_width": 2200,
+      "archive_bytes": 186571264
+    }
+  },
+  "prepared_counts": {
+    "dev": 1000,
+    "devtest": 1000,
+    "train": 9000,
+    "validation": 1000
+  },
+  "manifest_sha256": {
+    "dev.jsonl": "2ddfef0b72afe2b9bd364ae425eadb8914fccabf979bb76454992fe7a5c837ee",
+    "devtest.jsonl": "2e0a918bf4da9d28d91055d67e2b4b13c428723521e9e22f8d65f7ffc8517730",
+    "train.jsonl": "b3dae14693644efe34541251d2fbe174dea886d75b75e0f9c78ec0ac33044d90",
+    "validation.jsonl": "b41585dfcd048fc2bf1f5c5c2faf0d3b2178e8128ad8dc0b49377fa82cabfeb0"
+  }
+}

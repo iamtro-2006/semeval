@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semeval-mmcultureqa"
+version = "0.1.0"
+description = "SemEval Task 6 English VQA: SFT and GRPO with PEFT"
+requires-python = ">=3.11"
+
+[project.scripts]
+mmcqa-data = "mmcultureqa.data.prepare:main"
+mmcqa-sft = "mmcultureqa.training.sft:main"
+mmcqa-grpo = "mmcultureqa.training.grpo:main"
+mmcqa-infer = "mmcultureqa.inference.predict:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
