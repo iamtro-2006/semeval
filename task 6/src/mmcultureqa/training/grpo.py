@@ -39,7 +39,9 @@ def main():
     args = GRPOConfig(**tc)
     reward = build_reward(cfg)  # loaded once, not for each rollout
     provenance(cfg, tc['output_dir'])
+    from ..storage import checkpoint_callbacks
     trainer = GRPOTrainer(model=model, processing_class=processor, args=args,
+                          callbacks=checkpoint_callbacks(),
                           train_dataset=train, eval_dataset=validation, reward_funcs=reward)
     trainer.train(resume_from_checkpoint=cfg.get('resume_from_checkpoint'))
     final = path(tc['output_dir']) / 'final'

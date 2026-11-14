@@ -4,43 +4,45 @@ Pipeline riêng trong `D:\semeval\task 6`, không thay đổi Task 8. SFT dùng 
 
 ## Bắt đầu trên Colab
 
-1. Mở `notebooks/01_hf_to_drive_rclone.ipynb` trên Colab CPU. Cell đầu clone `https://github.com/iamtro-2006/semeval.git`, checkout `GIT_REF`, vào `task 6/` và cài package. Notebook tải English QA trực tiếp từ Hugging Face rồi dùng rclone copy archive và nhãn lên Google Drive. Trong cell cấu hình, sửa `RCLONE_CONFIG_PATH`, `REMOTE`, `ROOT_FOLDER_ID` và `DESTINATION_SUBDIR`. Notebook dùng bản sao tạm của config, không sửa file gốc.
-2. Mở `notebooks/02_sft_colab.ipynb` trên Colab GPU. Chạy setup rồi **chỉ train SFT**. Checkpoint định kỳ và adapter `final` được ghi trực tiếp vào Drive. Cell cuối in đường dẫn adapter để dùng ở bước tiếp theo; có thể kết thúc phiên Colab.
-3. Mở `notebooks/03_grpo_colab.ipynb` trong phiên GPU riêng. Setup giống notebook SFT, nhưng **chỉ train GRPO**. Sửa `SFT_ADAPTER` thành đường dẫn adapter SFT trên Drive; GRPO cập nhật tiếp LoRA đó và lưu vào thư mục GRPO riêng. Không cần chạy lại SFT.
-4. Mở `notebooks/04_inference_colab.ipynb` để inference/chấm điểm độc lập. Sửa các đường dẫn SFT/GRPO trên Drive muốn so sánh. Notebook này không train.
-5. Để `RUN_FULL=False` cho lượt thử 1 optimizer step. Sau khi xác nhận chạy được, dùng tên experiment mới và `RUN_FULL=True`. Smoke không phải kết quả thực nghiệm. Khi chạy GRPO đầy đủ, nhớ chọn adapter của lượt SFT đầy đủ.
-6. Checkpoint lưu vào Drive; ảnh và xử lý dữ liệu ở SSD Colab. Khi Colab yêu cầu restart sau cài package, restart rồi chạy lại setup.
-
-Luồng checkpoint giữa hai phiên độc lập:
-
-```text
-02_sft_colab → Drive/.../sft/final
-                              ↓ SFT_ADAPTER
-03_grpo_colab → Drive/.../grpo/final
-                              ↓
-04_inference_colab → predictions và scores trên Drive
-```
-
-`final` là adapter + processor, không chứa bản sao toàn bộ base model. Muốn **resume cùng một stage** với optimizer/scheduler, dùng `resume_from_checkpoint=.../checkpoint-N`; muốn **chuyển SFT sang GRPO**, dùng `model.adapter`/`SFT_ADAPTER`, khởi tạo optimizer GRPO mới.
-
-Notebook lấy code trực tiếp từ GitHub; không đóng gói hay upload ZIP code. Sửa `REPO_URL` và `GIT_REF` trong notebook để chọn repo/branch/commit. Khi chỉnh generator, sinh lại notebook:
-
-```powershell
-python tools/build_notebooks.py
-```
-
-Ví dụ cell rclone khi thư mục root là `MMCQA` trong My Drive:
+Bốn notebook dùng cùng một cấu hình lưu trữ. Bạn chỉ nhập ID (hoặc URL) của folder `MMCQA` vào `ROOT_FOLDER_ID`, và cung cấp file rclone đã xác thực qua `RCLONE_CONFIG_PATH`. Notebook tự chọn remote nếu config chỉ có một Google Drive remote; nếu nhiều remote thì chọn `REMOTE`. Không nhập đường dẫn MyDrive hay thư mục đích.
 
 ```python
-RCLONE_CONFIG_PATH = '/content/drive/MyDrive/configs/rclone.conf'
-REMOTE = 'gdrive'
-ROOT_FOLDER_ID = 'ID_THU_MUC_MMCQA'  # cũng nhận URL folder đầy đủ
-DESTINATION_SUBDIR = 'task6-data/raw'
-TRANSFERS = 4
-CHECKERS = 8
+ROOT_FOLDER_ID = 'ID_HOAC_URL_FOLDER_MMCQA'
+RCLONE_CONFIG_PATH = '/content/rclone.conf'
+REMOTE = ''  # tự chọn nếu có đúng một Google Drive remote
 ```
 
-Nếu file config nằm trên Drive, chạy cell mount Drive tùy chọn trước. Nếu upload config qua Files panel, dùng `/content/rclone.conf`. Để root rỗng và subdir rỗng sẽ dùng `My Drive/MMCQA/task6-data/raw`. Nếu đổi thư mục đích khác cấu trúc mặc định, sửa `drive_raw` tương ứng trong notebook thực nghiệm; folder ID của rclone không tự thay đổi đường dẫn Drive mount.
+Cấu trúc bên dưới root được tự thiết lập, không phụ thuộc vị trí/tên đường dẫn mount của folder:
+
+```text
+MMCQA/                           ← ROOT_FOLDER_ID
+├── task6-data/raw/               nhãn và 3 ZIP ảnh
+└── task6-runs/<RUN_NAME>/
+    ├── sft/                     hoặc sft-smoke
+    │   ├── checkpoint-N/
+    │   └── final/
+    ├── grpo/                    hoặc grpo-smoke
+    │   ├── checkpoint-N/
+    │   └── final/
+    └── predictions/             JSONL và scores
+```
+
+1. `01_hf_to_drive_rclone.ipynb`: tải từ Hugging Face trên Colab, upload nhãn/ZIP vào `task6-data/raw` bên dưới root.
+2. `02_sft_colab.ipynb`: copy dữ liệu về SSD, chỉ train SFT; tự upload checkpoint sau mỗi lần save và upload adapter final khi subprocess kết thúc. Có thể đóng phiên sau khi upload hoàn tất.
+3. `03_grpo_colab.ipynb`: setup tương tự, chỉ train GRPO. Chọn `SFT_RUN_NAME`, `INPUT_SFT_STAGE`, `SFT_CHECKPOINT` (mặc định theo cùng run và chế độ smoke/full); đường dẫn adapter tự suy ra từ root. Adapter SFT copy về SSD và LoRA được cập nhật tiếp.
+4. `04_inference_colab.ipynb`: tải các adapter từ root, inference và chấm điểm độc lập, tự upload kết quả vào `predictions`.
+
+Mỗi notebook clone repo `iamtro-2006/semeval` và cài package trong `task 6/`. Không ZIP/upload code. Dùng cùng `ROOT_FOLDER_ID` trong các phiên để đồng bộ. File rclone gốc không bị sửa; dùng bản sao tạm để refresh token. Nếu config nằm trên Drive thì chạy cell mount tùy chọn chỉ để đọc config.
+
+`RUN_FULL=False` mặc định chạy thử một optimizer step; full run dùng tên experiment mới và `RUN_FULL=True`. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'`, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
+
+Training và ảnh dùng SSD local; rclone copy checkpoint theo lịch save và cuối stage. Nếu Colab bị ngắt đột ngột, chỉ checkpoint đã upload xong mới phục hồi được. Remote dùng `copy`, không xóa checkpoint cũ trên Drive; save_total_limit chỉ giới hạn bản local. CLI ngoài notebook vẫn hoạt động bình thường, không sync nếu không cấu hình môi trường callback.
+
+Sửa notebook generator rồi sinh lại:
+
+```bash
+python tools/build_notebooks.py
+```
 
 ## Dữ liệu đã kiểm tra thực tế
 

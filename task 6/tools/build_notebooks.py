@@ -43,217 +43,188 @@ print('Project:', Path.cwd())
 print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
 ''')]
 
-transfer = setup + [md('''## 1. Download all three English QA splits on Colab
-Only `qa/mena/*_en.{jsonl,parquet}` and three `images_mena_*.zip` are selected.
-No audio, other languages, or embedded-media demo files.
-'''), code('''%pip -q install huggingface-hub==0.36.0 Pillow==11.3.0
-!python -m mmcultureqa.data.prepare download
-!python -m mmcultureqa.data.prepare prepare
-'''), md('''## 2. Editable rclone settings
-Set everything in the next cell. `RCLONE_CONFIG_PATH` points to an existing, authenticated
-rclone.conf (upload it via Colab's Files panel, or mount Drive in the optional cell).
-`REMOTE` is the section name in that file, without a trailing colon.
-
-Set `ROOT_FOLDER_ID` to a Drive folder ID or its full folder URL. When it is set,
-`DESTINATION_SUBDIR` is relative to that folder. Empty means My Drive root, overriding
-any root_folder_id already in the supplied config. Example: select the MMCQA folder as
-root and use `task6-data/raw` as destination. Without a root, use `MMCQA/task6-data/raw`.
-The supplied config is copied to a private temporary file; the original is never modified.
-An authenticated config is still required: a folder ID alone does not grant access.
-'''), code('''# Optional: run if rclone.conf is stored on Drive rather than uploaded to /content.
+# Shared storage setup: every notebook uses the same folder ID and relative layout.
+storage = [md('''## MMCQA folder and authentication
+Only ROOT_FOLDER_ID selects storage. Paste the ID or URL of your MMCQA folder.
+RCLONE_CONFIG_PATH points to your authenticated rclone.conf; this is not a storage root.
+All data, adapters, checkpoints and results are addressed relative to the selected ID.
+If your config is on mounted Drive, run the optional mount cell first.
+'''), code('''# Optional, only to access a config file stored on Drive:
 # from google.colab import drive
 # drive.mount('/content/drive')
-'''), code('''# Change these settings directly in the notebook.
-RCLONE_CONFIG_PATH = '/content/rclone.conf'  # or /content/drive/MyDrive/.../rclone.conf
-REMOTE = 'gdrive'
-ROOT_FOLDER_ID = ''  # folder ID or https://drive.google.com/drive/folders/...
-DESTINATION_SUBDIR = ''  # empty: auto-select task6-data/raw if root set, else MMCQA/task6-data/raw
-TRANSFERS = 4
-CHECKERS = 8
+'''), code('''ROOT_FOLDER_ID = ''  # REQUIRED: ID or URL of the MMCQA folder
+RCLONE_CONFIG_PATH = '/content/rclone.conf'
+REMOTE = ''  # auto-detect when the config contains one Google Drive remote
 '''), code('''!sudo apt-get -qq update && sudo apt-get -qq install -y rclone
 import configparser, re, tempfile
 from urllib.parse import urlparse
-
-original_config = Path(RCLONE_CONFIG_PATH).expanduser()
-if not original_config.is_file():
-    raise FileNotFoundError(f'Upload rclone.conf or mount Drive, then set RCLONE_CONFIG_PATH: {original_config}')
+config_source = Path(RCLONE_CONFIG_PATH).expanduser()
+if not config_source.is_file():
+    raise FileNotFoundError(f'Upload your authenticated rclone.conf or mount Drive: {config_source}')
 sections = configparser.RawConfigParser()
-sections.read(original_config, encoding='utf-8-sig')
-if REMOTE not in sections or sections[REMOTE].get('type') != 'drive':
-    raise ValueError('REMOTE must name a Google Drive section in the supplied rclone.conf')
+sections.read(config_source, encoding='utf-8-sig')
+remotes = [name for name in sections.sections() if sections[name].get('type') == 'drive']
+if not REMOTE:
+    if len(remotes) != 1:
+        raise ValueError(f'Select REMOTE from Google Drive sections: {remotes}')
+    REMOTE = remotes[0]
+if REMOTE not in remotes:
+    raise ValueError('REMOTE must be a Google Drive section')
 root_id = ROOT_FOLDER_ID.strip()
 if root_id.startswith(('https://', 'http://')):
     match = re.search(r'/folders/([^/?]+)', urlparse(root_id).path)
-    if not match:
-        raise ValueError('Use a Google Drive folder URL containing /folders/<id>')
-    root_id = match.group(1)
-if root_id and not re.fullmatch(r'[A-Za-z0-9_-]+', root_id):
-    raise ValueError('Invalid Drive folder ID')
-subdir = DESTINATION_SUBDIR.strip() or ('task6-data/raw' if root_id else 'MMCQA/task6-data/raw')
-if subdir.startswith('/') or ':' in subdir or '..' in Path(subdir).parts:
-    raise ValueError('DESTINATION_SUBDIR must be a relative folder path')
-if TRANSFERS < 1 or CHECKERS < 1:
-    raise ValueError('TRANSFERS and CHECKERS must be positive')
-
-# rclone may refresh tokens; keep writes in a temporary copy, not the original.
+    root_id = match.group(1) if match else ''
+if not re.fullmatch(r'[A-Za-z0-9_-]+', root_id):
+    raise ValueError('Enter the ID or folder URL of MMCQA in ROOT_FOLDER_ID')
 temporary_config = tempfile.TemporaryDirectory(prefix='mmcqa-rclone-')
 config_path = Path(temporary_config.name) / 'rclone.conf'
-config_path.write_bytes(original_config.read_bytes())
+config_path.write_bytes(config_source.read_bytes())
 config_path.chmod(0o600)
 rclone_base = ['rclone', '--config', str(config_path), '--drive-root-folder-id', root_id]
-DESTINATION = f'{REMOTE}:{subdir}'
-print('Config source:', original_config)
-print('Drive root:', root_id or 'My Drive')
-print('Destination relative to root:', DESTINATION)
-# Read-only check before the upload cell. Credentials are never printed.
-subprocess.run(rclone_base + ['lsd', f'{REMOTE}:', '--max-depth', '1'], check=True)
-'''), md('''## 3. Upload archives and labels from Colab → Drive
-`copy` is incremental and does not delete destination files. Keep archives compressed on Drive;
-the experiment notebook copies them to Colab's SSD and extracts locally.
-'''), code('''subprocess.run(rclone_base + ['copy', 'data/raw', DESTINATION,
-                '--progress', '--transfers', str(TRANSFERS), '--checkers', str(CHECKERS), '--exclude', '.cache/**',
-                '--exclude', 'train/**', '--exclude', 'dev/**', '--exclude', 'devtest/**'], check=True)
-subprocess.run(rclone_base + ['check', 'data/raw', DESTINATION,
-                '--one-way', '--size-only', '--exclude', '.cache/**', '--exclude', 'train/**',
-                '--exclude', 'dev/**', '--exclude', 'devtest/**'], check=True)
-'''), code('''# Remove temporary credentials after the transfer. Reconfigure next session if needed.
-temporary_config.cleanup()
+def cloud(relative):
+    if relative.startswith('/') or '..' in Path(relative).parts:
+        raise ValueError('Storage paths must be relative to MMCQA')
+    return f'{REMOTE}:{relative}'
+def copy(source, destination, *extra):
+    subprocess.run(rclone_base + ['copy', str(source), str(destination),
+                   '--transfers', '4', '--checkers', '8', '--progress', *extra], check=True)
+subprocess.run(rclone_base + ['lsd', cloud(''), '--max-depth', '1'], check=True)
+print('All storage is relative to MMCQA folder ID:', root_id)
 ''')]
 
-experiment = setup + [md('''## 1. Install the pinned GPU training environment
-After this cell, restart the runtime if Colab requests it, then rerun the clone/setup cell.
-Do not install the CPU-only requirements in vendor/organizer into this GPU environment.
-'''), code('''%pip -q install -r requirements.txt
-!python -m pip check
-!nvidia-smi
-'''), code('''from google.colab import drive
-drive.mount('/content/drive')
-'''), md('''## 2. Copy data from Drive or download directly from Hugging Face
-All extraction and image reads happen on local SSD, not mounted Drive.
-'''), code('''import shutil
-USE_DRIVE_DATA = True
-drive_raw = Path('/content/drive/MyDrive/MMCQA/task6-data/raw')
+data_setup = [md('''## Prepare data on Colab SSD
+The download location is automatically derived from ROOT_FOLDER_ID.
+'''), code('''USE_DRIVE_DATA = True
 if USE_DRIVE_DATA:
-    if not drive_raw.exists():
-        raise FileNotFoundError('Run the transfer notebook first, or set USE_DRIVE_DATA=False')
-    shutil.copytree(drive_raw, Path('data/raw'), dirs_exist_ok=True)
+    copy(cloud('task6-data/raw'), 'data/raw')
 else:
     subprocess.run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'download'], check=True)
 subprocess.run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=True)
-'''), md('''## 3. Editable experiment settings
-Edit prompts/qa.txt and YAML files, or use dotted --set overrides below.
-4-bit is explicit for a memory-limited Colab GPU. Set False for native precision.
-GPU smoke runs are needed before full training; they have not been executed on the CPU-only development machine.
-'''), code('''USE_4BIT = True
-RUN_FULL = False
-RUN_NAME = 'experiment01'  # use a new name for a fresh experiment
-RUNS = Path('/content/drive/MyDrive/MMCQA/task6-runs') / RUN_NAME
-RUNS.mkdir(parents=True, exist_ok=True)
-SFT = str(RUNS / ('sft' if RUN_FULL else 'sft-smoke'))
-GRPO = str(RUNS / ('grpo' if RUN_FULL else 'grpo-smoke'))
+''')]
 
-def run(module, config, overrides):
+gpu_setup = setup + [md('''## Install GPU environment
+Restart the runtime if requested, then rerun clone/setup. GPU training has not been run on the CPU-only development machine.
+'''), code('''%pip -q install -r requirements.txt
+!python -m pip check
+!nvidia-smi
+''')] + storage + data_setup + [md('''## Experiment settings
+Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
+Periodic checkpoints upload after each save; final adapter uploads after training finishes.
+Local SSD is used for training and inference. A disconnected runtime can only recover checkpoints already uploaded.
+'''), code('''import json
+USE_4BIT = True
+RUN_FULL = False
+RUN_NAME = 'experiment01'
+if not re.fullmatch(r'[A-Za-z0-9_-]+', RUN_NAME):
+    raise ValueError('RUN_NAME must contain only letters, numbers, underscores or hyphens')
+RUNS = Path('outputs/runs') / RUN_NAME
+RUNS.mkdir(parents=True, exist_ok=True)
+SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
+GRPO_STAGE = 'grpo' if RUN_FULL else 'grpo-smoke'
+SFT = str(RUNS / SFT_STAGE)
+GRPO = str(RUNS / GRPO_STAGE)
+common = {'model.load_in_4bit': USE_4BIT}
+
+def run(module, config, overrides, local_output, cloud_subdir):
     cmd = [sys.executable, '-m', module, '--config', config]
     for key, value in overrides.items():
-        cmd += ['--set', f'{key}={value}']
-    subprocess.run(cmd, check=True)
+        cmd += ['--set', f'{key}={json.dumps(value)}']
+    env = dict(os.environ)
+    env.update(MMCQA_RCLONE_CONFIG=str(config_path), MMCQA_DRIVE_ROOT_ID=root_id,
+               MMCQA_SYNC_DESTINATION=cloud(cloud_subdir))
+    result = subprocess.run(cmd, env=env)
+    # Also preserve final adapter and logs, including after a failed training subprocess.
+    if Path(local_output).exists():
+        copy(local_output, cloud(cloud_subdir))
+    result.check_returncode()
+''')]
 
-common = {'model.load_in_4bit': str(USE_4BIT).lower()}
-'''), md('''## 4. SFT (answer-only loss)
-Smoke: 1 optimizer step. Full: configured 2 epochs, internal validation used for checkpoint selection.
-Saved `final` contains LoRA adapter and processor; the base weights are not duplicated.
-'''), code('''sft_args = {**common, 'training.output_dir': SFT}
+transfer = setup + storage + [md('''## Download English QA and upload automatically below MMCQA
+Includes train/dev/devtest JSONL, Parquet and image ZIPs; excludes audio and other languages.
+Only compressed archives and labels are uploaded. All later notebooks use the same relative data path.
+'''), code('''%pip -q install huggingface-hub==0.36.0 Pillow==11.3.0
+!python -m mmcultureqa.data.prepare download
+!python -m mmcultureqa.data.prepare prepare
+'''), code('''filters = ['--exclude', '.cache/**', '--exclude', 'train/**', '--exclude', 'dev/**', '--exclude', 'devtest/**']
+copy('data/raw', cloud('task6-data/raw'), *filters)
+subprocess.run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
+                '--one-way', '--size-only', *filters], check=True)
+print('Dataset ready under MMCQA/task6-data/raw')
+''')]
+
+sft_notebook = gpu_setup + [md('''## SFT only
+Edit SFT_OVERRIDES for prompt and training parameters. For same-stage resume, set
+RESUME_CHECKPOINT to checkpoint-N already saved under this run on Drive.
+'''), code('''SFT_OVERRIDES = {}  # e.g. {'training.learning_rate': 0.0001, 'prompt_file': 'prompts/qa.txt'}
+RESUME_CHECKPOINT = ''  # e.g. checkpoint-100; leave empty for a fresh run
+sft_args = {**common, 'training.output_dir': SFT}
 if not RUN_FULL:
     sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',
-                     'training.load_best_model_at_end': 'false', 'training.save_steps': 1})
-run('mmcultureqa.training.sft', 'configs/sft.yaml', sft_args)
-'''), md('''## Optional: continue GRPO directly from the published SFT adapter
-Skip the SFT cell if using this. Its published split differs from our generated split.
-For internal validation claims, import its original held-out manifest; do not assume our split was unseen.
-The official dev split is separate according to the reference repo's audit.
-'''), code('''USE_PUBLISHED_ADAPTER = False
-SFT_ADAPTER = 'anhbilong/qwen3-vl-4b-mmcultureqa-split512' if USE_PUBLISHED_ADAPTER else f'{SFT}/final'
-ADAPTER_REVISION = 'e62fdf28389cdc11f45f295f63e3e4c354e8eabe' if USE_PUBLISHED_ADAPTER else 'null'
-'''), md('''## 5. GRPO continuation with trainable SFT LoRA
-Generates fresh groups during training; no precomputed inference file is required.
-mmBERT reward runs on CPU by default to preserve GPU VRAM; use reward.device=cuda if memory permits.
-beta=0 explicitly avoids treating the pre-SFT base as the KL reference.
-'''), code('''grpo_args = {**common, 'model.adapter': SFT_ADAPTER, 'model.adapter_revision': ADAPTER_REVISION,
+                     'training.load_best_model_at_end': False, 'training.save_steps': 1})
+if RESUME_CHECKPOINT:
+    copy(cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}'), SFT)
+    sft_args['resume_from_checkpoint'] = str(Path(SFT) / RESUME_CHECKPOINT)
+sft_args.update(SFT_OVERRIDES)
+run('mmcultureqa.training.sft', 'configs/sft.yaml', sft_args, SFT, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
+'''), code('''if not (Path(SFT) / 'final/adapter_config.json').is_file():
+    raise FileNotFoundError('No final SFT adapter was saved')
+print('SFT adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}/final'))
+print('Notebook 03: select the same ROOT_FOLDER_ID, SFT_RUN_NAME and INPUT_SFT_STAGE.')
+''')]
+
+grpo_notebook = gpu_setup + [md('''## GRPO only: select SFT input by run name
+Paths are automatically derived from MMCQA root. This notebook never trains SFT.
+A full GRPO experiment should use a full SFT checkpoint, not a smoke adapter.
+'''), code('''SFT_RUN_NAME = RUN_NAME
+INPUT_SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
+SFT_CHECKPOINT = 'final'  # or checkpoint-N
+GRPO_OVERRIDES = {}  # e.g. {'reward.device': 'cuda', 'training.learning_rate': 0.000005}
+RESUME_CHECKPOINT = ''  # GRPO checkpoint-N in this output run, for same-stage resume
+local_adapter = Path('outputs/inputs/sft') / SFT_RUN_NAME / INPUT_SFT_STAGE / SFT_CHECKPOINT
+copy(cloud(f'task6-runs/{SFT_RUN_NAME}/{INPUT_SFT_STAGE}/{SFT_CHECKPOINT}'), local_adapter)
+if not (local_adapter / 'adapter_config.json').is_file():
+    raise FileNotFoundError('SFT adapter not found. Check the selected run/stage/checkpoint.')
+if not any((local_adapter / name).is_file() for name in ['adapter_model.safetensors', 'adapter_model.bin']):
+    raise FileNotFoundError('SFT weights missing; complete SFT save/upload first')
+grpo_args = {**common, 'model.adapter': str(local_adapter), 'model.adapter_revision': None,
              'training.output_dir': GRPO}
 if not RUN_FULL:
     grpo_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.save_steps': 1})
-run('mmcultureqa.training.grpo', 'configs/grpo.yaml', grpo_args)
-'''), md('''## 6. Compare SFT and GRPO with identical inference settings
-Smoke predictions cover only 4 rows; do not score them against full dev.
-For actual comparison, set RUN_FULL=True and complete both full runs first.
-Use split=devtest for answer-free submission generation.
-'''), code('''SPLIT = 'dev'
-for label, adapter in [('sft', SFT_ADAPTER), ('grpo', f'{GRPO}/final')]:
-    overrides = {**common, 'model.adapter': adapter,
-                 'model.adapter_revision': ADAPTER_REVISION if label == 'sft' else 'null',
-                 'inference.split': SPLIT, 'inference.output': str(RUNS / f'{label}_{SPLIT}.jsonl')}
+if RESUME_CHECKPOINT:
+    copy(cloud(f'task6-runs/{RUN_NAME}/{GRPO_STAGE}'), GRPO)
+    grpo_args['resume_from_checkpoint'] = str(Path(GRPO) / RESUME_CHECKPOINT)
+grpo_args.update(GRPO_OVERRIDES)
+run('mmcultureqa.training.grpo', 'configs/grpo.yaml', grpo_args, GRPO, f'task6-runs/{RUN_NAME}/{GRPO_STAGE}')
+'''), code('''if not (Path(GRPO) / 'final/adapter_config.json').is_file():
+    raise FileNotFoundError('No final GRPO adapter was saved')
+print('GRPO adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{GRPO_STAGE}/final'))
+''')]
+
+inference_notebook = gpu_setup + [md('''## Inference and scoring only
+Select run/stage names below. No manual Drive filesystem paths are needed.
+'''), code('''INPUT_RUN_NAME = RUN_NAME
+SPLIT = 'dev'  # devtest for unlabelled predictions
+ADAPTER_STAGES = {'sft': SFT_STAGE, 'grpo': GRPO_STAGE}
+predictions = RUNS / 'predictions'
+for label, stage in ADAPTER_STAGES.items():
+    adapter = Path('outputs/inputs/inference') / INPUT_RUN_NAME / stage / 'final'
+    copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{stage}/final'), adapter)
+    overrides = {**common, 'model.adapter': str(adapter), 'model.adapter_revision': None,
+                 'inference.split': SPLIT, 'inference.output': str(predictions / f'{label}_{SPLIT}.jsonl')}
     if not RUN_FULL:
         overrides['data.limit'] = 4
-    run('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
-'''), md('''## 7. Official scoring (full labelled dev only)
-The vendored backbone and wrapper are unchanged from the reference repository.
-For leaderboard dependency parity use a separate environment with vendor/organizer/requirements.txt;
-the GPU environment below uses the same pinned encoder and metric settings, but a different torch version.
+    run('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides,
+        predictions, f'task6-runs/{RUN_NAME}/predictions')
 '''), code('''if RUN_FULL and SPLIT == 'dev':
-    for label in ['sft', 'grpo']:
+    for label in ADAPTER_STAGES:
         subprocess.run([sys.executable, 'vendor/organizer/scorer/score.py',
                         '--gold', 'data/raw/qa/mena/dev_en.jsonl',
-                        '--pred', str(RUNS / f'{label}_dev.jsonl'),
-                        '--out', str(RUNS / f'{label}_scores.json')], check=True)
+                        '--pred', str(predictions / f'{label}_dev.jsonl'),
+                        '--out', str(predictions / f'{label}_scores.json')], check=True)
+    copy(predictions, cloud(f'task6-runs/{RUN_NAME}/predictions'))
 else:
     print('Scoring skipped: smoke subset or unlabelled split.')
 ''')]
-
-# Keep the same clone/install/Drive/data/config cells in each independent session.
-# Only the stage-specific cells differ. Never run SFT again inside the GRPO notebook.
-sft_notebook = experiment[:11] + [md('''## 5. SFT checkpoint on Drive
-Training writes periodic checkpoints and the final adapter directly to Drive.
-`final` contains adapter + processor; base Qwen weights are downloaded separately.
-Copy the printed path into SFT_ADAPTER in notebook 03. You may end this Colab session.
-For SFT resume, set resume_from_checkpoint to a checkpoint-N directory in the SFT run cell.
-'''), code('''SFT_FINAL = Path(SFT) / 'final'
-if not (SFT_FINAL / 'adapter_config.json').is_file():
-    raise FileNotFoundError(f'SFT did not produce a final adapter: {SFT_FINAL}')
-print('SFT adapter saved on Drive:', SFT_FINAL)
-print('Use this path as SFT_ADAPTER in notebook 03.')
-''')]
-
-grpo_notebook = experiment[:9] + [md('''## 4. Choose the SFT checkpoint saved on Drive
-Run this notebook in a new GPU session after notebook 02. No SFT is run here.
-Set SFT_ADAPTER to the final adapter path printed by notebook 02, or to an SFT checkpoint-N.
-RUN_NAME above controls the GRPO output path; SFT_ADAPTER independently selects its input.
-Use a full SFT run as input for a real experiment; a smoke adapter only verifies the pipeline.
-'''), code('''SFT_ADAPTER = '/content/drive/MyDrive/MMCQA/task6-runs/experiment01/sft-smoke/final'
-ADAPTER_REVISION = 'null'  # local Drive adapter, no Hub revision
-
-sft_input = Path(SFT_ADAPTER)
-if not (sft_input / 'adapter_config.json').is_file():
-    raise FileNotFoundError(f'Set SFT_ADAPTER to an existing SFT adapter on Drive: {sft_input}')
-if not any((sft_input / name).is_file() for name in ['adapter_model.safetensors', 'adapter_model.bin']):
-    raise FileNotFoundError('SFT adapter weights are missing; wait for the SFT save to complete')
-if sft_input.resolve() == (Path(GRPO) / 'final').resolve() or Path(GRPO).resolve() in sft_input.resolve().parents:
-    raise ValueError('Choose a GRPO output directory separate from the input SFT run')
-print('Input SFT adapter:', SFT_ADAPTER)
-print('GRPO output on Drive:', GRPO)
-''')] + experiment[13:15] + [code('''GRPO_FINAL = Path(GRPO) / 'final'
-if not (GRPO_FINAL / 'adapter_config.json').is_file():
-    raise FileNotFoundError(f'GRPO did not produce a final adapter: {GRPO_FINAL}')
-print('GRPO adapter saved on Drive:', GRPO_FINAL)
-''')]
-
-inference_notebook = experiment[:9] + [md('''## 4. Select trained adapters for inference
-This notebook runs no training. Choose existing SFT and GRPO paths on Drive.
-Set RUN_FULL=True above for full-split predictions and scoring, or False for 4-row inference.
-'''), code('''SFT_ADAPTER = '/content/drive/MyDrive/MMCQA/task6-runs/experiment01/sft-smoke/final'
-GRPO_RUN = '/content/drive/MyDrive/MMCQA/task6-runs/experiment01/grpo-smoke'
-GRPO = GRPO_RUN
-ADAPTER_REVISION = 'null'
-''')] + experiment[15:]
 
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
                     ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook)]:

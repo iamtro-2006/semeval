@@ -59,7 +59,9 @@ def main():
     print('Preflight:', {k: tuple(v.shape) for k, v in sample.items()},
           'answer tokens:', int((sample['labels'] != -100).sum()))
     provenance(cfg, tc['output_dir'])
+    from ..storage import checkpoint_callbacks
     trainer = Trainer(model=model, args=TrainingArguments(**tc), train_dataset=train,
+                      callbacks=checkpoint_callbacks(),
                       eval_dataset=validation, data_collator=collator, processing_class=processor)
     trainer.train(resume_from_checkpoint=cfg.get('resume_from_checkpoint'))
     final = path(tc['output_dir']) / 'final'
