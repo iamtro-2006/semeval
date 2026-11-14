@@ -126,7 +126,7 @@ def train(cfg, stage):
     from ..storage import checkpoint_callbacks
     register_plugins(cfg)
     # Reserve scorer memory before vLLM profiles the GPU. Reuse this cached encoder
-    # for every reward/metric call; keep FP32 to preserve organizer scoring settings.
+    # for every reward/metric call using the configured scoring precision.
     from .swift_metrics import preload_scorer
     if stage == 'grpo' and cfg['reward']['type'] == 'mmbert':
         preload_scorer(cfg['reward'])

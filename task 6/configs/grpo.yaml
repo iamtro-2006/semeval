@@ -33,4 +33,5 @@ reward:
   revision: c5955035435e2bf121cde7f3c8863ef52ff35d82
   num_layers: 17
   device: cuda
+  dtype: float16
   batch_size: 4

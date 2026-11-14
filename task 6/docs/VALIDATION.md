@@ -13,5 +13,6 @@ Completed against the actual downloaded snapshot:
 - Native metric_mapping and ORM registration tested with stub framework/encoder, including precision/recall/F1 return keys, exact reward and empty-answer zero handling. Actual mmBERT inference remains unexecuted.
 - Scorer source copied with its existing organizer provenance and license; no scorer modifications.
 - BF16/CUDA mmBERT/vLLM defaults checked in YAML and generated notebooks. Native rollout option names and standalone VllmEngine keyword arguments checked against ms-swift v3.11.3 source. vLLM 0.11.0's torch 2.8.0/torchvision 0.23.0 dependency pins inspected.
+- mmBERT FP16 casting and separate FP16/FP32 scorer caches verified with a stub model. Final scoring uses a precision-selectable wrapper; original organizer files remain unchanged. GPU precision differences and speed have not been measured.
 
 Not performed locally: GPU model loading, SFT forward/backward, GRPO rollout/update, mmBERT reward execution, vLLM initialization/LoRA synchronization, 24 GB memory fitting, Colab execution, Google Drive authentication or transfer. The notebooks contain executable one-step GPU smoke paths for both SFT and GRPO, followed by adapter reload/inference. Full-run accuracy and speed remain unmeasured.

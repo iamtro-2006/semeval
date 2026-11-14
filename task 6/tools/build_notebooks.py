@@ -111,7 +111,7 @@ Restart the runtime if requested, then rerun clone/setup. GPU training has not b
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
 Periodic checkpoints upload after each save; final adapter uploads after training finishes.
 Local SSD is used for training and inference. A disconnected runtime can only recover checkpoints already uploaded.
-Default: native BF16 LoRA, CUDA mmBERT; GRPO uses vLLM colocate with sleep enabled.
+Default: native BF16 LoRA, CUDA FP16 mmBERT; GRPO uses vLLM colocate with sleep enabled.
 SFT's optional in-training generation monitor uses the native ms-swift Transformers path.
 Final validation/test inference uses vLLM. This is an unbenchmarked 24 GB starting configuration.
 '''), code('''import json
@@ -260,7 +260,7 @@ if test_rows and all(row.get('answer') for row in test_rows):
     gold = predictions / f'{SPLIT}_gold_en.jsonl'
     write_jsonl(gold, test_rows)
     for label in ADAPTER_STAGES:
-        subprocess.run([sys.executable, 'vendor/organizer/scorer/score.py',
+        subprocess.run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
                         '--gold', str(gold), '--lang', 'en',
                         '--pred', str(predictions / f'{label}_{SPLIT}.jsonl'),
                         '--out', str(predictions / f'{label}_{SPLIT}_scores.json')], check=True)

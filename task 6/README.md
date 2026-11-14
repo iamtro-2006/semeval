@@ -120,7 +120,7 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set model.load_
 python -m mmcultureqa.training.sft --config configs/sft.yaml --set resume_from_checkpoint=outputs/sft/checkpoint-100
 ```
 
-Mặc định cả YAML và notebook dùng **BF16, không 4-bit** (`USE_4BIT=False`). GPU phải hỗ trợ BF16; không tự fallback sang FP16/4-bit khi thiếu bộ nhớ. mmBERT reward/monitor chạy CUDA, batch 4 và giữ FP32 theo cấu hình scorer chính thức. Số generation, batch và gradient accumulation phải phù hợp quy tắc chia nhóm của GRPO; default 1 GPU: batch 1 × accumulation 4, group 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
+Mặc định cả YAML và notebook dùng **BF16, không 4-bit** (`USE_4BIT=False`). GPU phải hỗ trợ BF16; không tự fallback sang FP16/4-bit khi thiếu bộ nhớ. mmBERT reward/monitor chạy CUDA FP16, batch 4. Số generation, batch và gradient accumulation phải phù hợp quy tắc chia nhóm của GRPO; default 1 GPU: batch 1 × accumulation 4, group 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
 
 ## Monitoring theo ms-swift
 
@@ -148,7 +148,7 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.pr
 ## BF16 + GPU mmBERT + vLLM mặc định
 
 - SFT/GRPO: Qwen3-VL-4B BF16 + LoRA, không lượng tử hóa nền. GPU không hỗ trợ BF16 sẽ báo lỗi rõ ràng.
-- mmBERT dùng CUDA FP32 để giữ cách tính metric; scorer được preload trước khi vLLM profile bộ nhớ và cache để dùng lại. SFT không generation không load mmBERT không dùng đến; bật generation mới load scorer.
+- mmBERT dùng CUDA FP16; scorer được preload trước khi vLLM profile bộ nhớ và cache để dùng lại. SFT không generation không load mmBERT không dùng đến; bật generation mới load scorer.
 - GRPO: `use_vllm=true`, colocate, LoRA weight sync, `sleep_level=1`, prefix caching, tối đa 4 sequence, context 2048. vLLM chiếm ngân sách 0.45 tổng VRAM; model/optimizer training không offload mặc định.
 - vLLM có bản model phục vụ rollout riêng. Trên L4 24 GB, BF16 training + vLLM + mmBERT có thể chạm giới hạn VRAM dù chỉ load Qwen + mmBERT thì đủ. Sleep giải phóng vLLM giữa rollout và bước train. Đây là cấu hình khởi đầu chưa benchmark, không bảo đảm nhanh nhất hay luôn đủ 24 GB. Không tự giảm chất lượng để né OOM.
 - `training.vllm_max_model_len=2048` là giới hạn context phục vụ rollout, không phải lệnh cắt prompt. Prompt + ảnh + đáp án phải vừa giới hạn; nếu tăng prompt/ảnh, điều chỉnh cấu hình và đo VRAM. Các mẫu QA hiện có mặc định ngắn hơn nhiều mức này.
@@ -190,3 +190,14 @@ Scorer xếp hạng bằng mmBERT BERTScore-F1; các file trong vendor giữ ngu
 Đã tải và kiểm tra đủ 12.000 ảnh local, đủ ba JSONL và ba Parquet. Đã kiểm tra cú pháp code/notebook, manifest và cấu hình trên CPU. Máy phát triển không có GPU: chưa chạy forward/backward Qwen3-VL, chưa xác nhận loss/gradient trên GPU, chưa chạy thực nghiệm Colab và chưa có kết quả chứng minh GRPO cải thiện. Notebook cung cấp lượt thử GPU để xác nhận trước full run.
 
 Tham khảo API theo phiên bản được pin: `docs/SOURCES.md`.
+
+
+### Precision của mmBERT
+
+Mặc định `monitor.dtype=float16` và `reward.dtype=float16` trên CUDA. Model được cast FP16 một lần và cache; đổi dtype tạo cache riêng. Mô hình Qwen fine-tune vẫn BF16. FP16 giảm bộ nhớ trọng số mmBERT và có thể tăng tốc; chưa benchmark tốc độ hoặc độ lệch điểm trên GPU.
+
+Chấm cuối cũng dùng FP16 qua wrapper `python -m mmcultureqa.score`, giữ nguyên file organizer trong vendor. JSON điểm ghi `execution_precision`. Điểm accelerated FP16 có thể lệch nhẹ với FP32; muốn đối chiếu dùng `--dtype float32` hoặc chạy trực tiếp scorer organizer.
+
+```bash
+python -m mmcultureqa.score --dtype float16 --gold data/raw/qa/mena/dev_en.jsonl --pred outputs/predictions/sft_dev.jsonl --out outputs/scores_fp16.json
+```

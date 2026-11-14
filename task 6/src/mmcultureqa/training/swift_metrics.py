@@ -5,13 +5,20 @@ from functools import lru_cache
 
 @lru_cache(maxsize=4)
 def get_scorer(settings_json):
+    import torch
     from bert_score import BERTScorer
     from huggingface_hub import snapshot_download
     rc = json.loads(settings_json)
+    dtype = rc.get('dtype', 'float32')
+    if dtype not in {'float16', 'float32'}:
+        raise ValueError('mmBERT dtype must be float16 or float32')
+    if dtype == 'float16' and not rc['device'].startswith('cuda'):
+        raise ValueError('FP16 mmBERT requires CUDA; set dtype=float32 for CPU')
     directory = snapshot_download(rc['model'], revision=rc['revision'])
     scorer = BERTScorer(model_type=directory, num_layers=rc['num_layers'], batch_size=rc['batch_size'],
                        device=rc['device'], idf=False, rescale_with_baseline=False, use_fast_tokenizer=True)
     scorer._tokenizer.model_max_length = 512
+    scorer._model.to(dtype=getattr(torch, dtype))
     scorer._model.eval()
     return scorer
 
@@ -29,14 +36,17 @@ def score_texts(predictions, references, settings):
         with torch.inference_mode():
             values = scorer.score([predictions[i] for i in valid], [references[i] for i in valid])
         for key, tensor in zip(result, values):
+            if not torch.isfinite(tensor).all():
+                raise FloatingPointError('Non-finite mmBERT score; check inputs or select dtype=float32')
             for index, value in zip(valid, tensor.tolist()):
                 result[key][index] = float(value)
     return result
 
 
 def preload_scorer(settings):
-    return get_scorer(json.dumps({k: settings[k] for k in
-        ('model', 'revision', 'num_layers', 'batch_size', 'device')}, sort_keys=True))
+    values = {k: settings[k] for k in ('model', 'revision', 'num_layers', 'batch_size', 'device')}
+    values['dtype'] = settings.get('dtype', 'float32')
+    return get_scorer(json.dumps(values, sort_keys=True))
 
 
 def register_plugins(cfg):

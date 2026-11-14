@@ -68,7 +68,8 @@ def main():
     if len(predicted) != len(selected) or {r['id'] for r in predicted} != {r['id'] for r in selected}:
         raise ValueError('Predictions must cover exactly the selected validation IDs')
     scores = output / 'scores.json'
-    subprocess.run([sys.executable, str(ROOT / 'vendor/organizer/scorer/score.py'),
+    subprocess.run([sys.executable, '-m', 'mmcultureqa.score',
+                    '--dtype', cfg.get('monitor', {}).get('dtype', 'float16'),
                     '--gold', str(gold), '--pred', str(predictions), '--lang', 'en',
                     '--out', str(scores)], check=True, cwd=ROOT)
     summary = {'split': split, 'evaluated_rows': len(selected), 'total_validation_rows': len(validation),
