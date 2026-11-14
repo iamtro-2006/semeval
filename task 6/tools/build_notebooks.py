@@ -52,9 +52,9 @@ If your config is on mounted Drive, run the optional mount cell first.
 '''), code('''# Optional, only to access a config file stored on Drive:
 # from google.colab import drive
 # drive.mount('/content/drive')
-'''), code('''ROOT_FOLDER_ID = ''  # REQUIRED: ID or URL of the MMCQA folder
+'''), code('''ROOT_FOLDER_ID = '1kcdByZiSJzGSoEtY9q0OEhsZwiTZkxpV'  # ID or URL of the MMCQA folder
 RCLONE_CONFIG_PATH = '/content/rclone.conf'
-REMOTE = ''  # auto-detect when the config contains one Google Drive remote
+REMOTE = 'iamtro'  # Google Drive remote in rclone.conf
 '''), code('''!sudo apt-get -qq update && sudo apt-get -qq install -y rclone
 import configparser, re, tempfile
 from urllib.parse import urlparse
