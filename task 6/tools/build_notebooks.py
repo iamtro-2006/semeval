@@ -286,9 +286,22 @@ def learning_curves(run_variable, stage_variable, label):
     return [md('''## Learning curves before final evaluation
 Plot native training/validation metrics against optimizer step, then upload the PNG to Drive.
 Validation points appear only at completed evaluation intervals; no interpolation or smoothing.
-'''), code('''from mmcultureqa.training.curves import plot_learning_curves
-plot_learning_curves(__RUN_DIR__, '__LABEL__')
-upload_run(__RUN_DIR__, f'task6-runs/{RUN_NAME}/{__STAGE__}')
+'''), code('''import sys
+from pathlib import Path
+
+project = Path(CHECKOUT) / PROJECT_SUBDIR
+src = project / 'src'
+if not (src / 'mmcultureqa/training/curves.py').is_file():
+    raise FileNotFoundError(f'Learning-curve module not found under {src}')
+sys.path.insert(0, str(src))
+
+from mmcultureqa.training.curves import plot_learning_curves
+
+local_run = Path(__RUN_DIR__)
+if not local_run.is_absolute():
+    local_run = project / local_run
+plot_learning_curves(local_run, '__LABEL__')
+upload_run(local_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 '''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable).replace('__LABEL__', label))]
 
 
