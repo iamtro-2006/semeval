@@ -25,9 +25,40 @@ PROJECT_SUBDIR = 'task 6'
 
 from pathlib import Path
 import os, subprocess, sys
+import codecs
+
+def stream_run(cmd, check=True):
+    # Route child output through IPython stdout, rather than its hidden OS file descriptor.
+    env = dict(os.environ, PYTHONUNBUFFERED='1')
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    try:
+        while True:
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            sys.stdout.write(decoder.decode(chunk))
+            sys.stdout.flush()
+        sys.stdout.write(decoder.decode(b'', final=True))
+        sys.stdout.flush()
+        result = subprocess.CompletedProcess(cmd, process.wait())
+    except BaseException:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        process.stdout.close()
+    if check:
+        result.check_returncode()
+    return result
+
 checkout = Path(CHECKOUT)
 if not checkout.exists():
-    subprocess.run(['git', 'clone', REPO_URL, str(checkout)], check=True)
+    stream_run(['git', 'clone', REPO_URL, str(checkout)], check=True)
 else:
     actual = subprocess.check_output(['git', '-C', str(checkout), 'remote', 'get-url', 'origin'], text=True).strip()
     if actual != REPO_URL:
@@ -35,10 +66,10 @@ else:
     dirty = subprocess.check_output(['git', '-C', str(checkout), 'status', '--porcelain'], text=True)
     if dirty.strip():
         raise RuntimeError('Checkout has edits; preserve your changes or choose a fresh CHECKOUT before switching revision')
-subprocess.run(['git', '-C', str(checkout), 'fetch', 'origin', GIT_REF], check=True)
-subprocess.run(['git', '-C', str(checkout), 'checkout', '--detach', 'FETCH_HEAD'], check=True)
+stream_run(['git', '-C', str(checkout), 'fetch', 'origin', GIT_REF], check=True)
+stream_run(['git', '-C', str(checkout), 'checkout', '--detach', 'FETCH_HEAD'], check=True)
 os.chdir(checkout / PROJECT_SUBDIR)
-subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', '.'], check=True)
+stream_run([sys.executable, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', '.'], check=True)
 print('Project:', Path.cwd())
 print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
 ''')]
@@ -86,9 +117,9 @@ def cloud(relative):
         raise ValueError('Storage paths must be relative to MMCQA')
     return f'{REMOTE}:{relative}'
 def copy(source, destination, *extra):
-    subprocess.run(rclone_base + ['copy', str(source), str(destination),
+    stream_run(rclone_base + ['copy', str(source), str(destination),
                    '--transfers', '4', '--checkers', '8', '--progress', *extra], check=True)
-subprocess.run(rclone_base + ['lsd', cloud(''), '--max-depth', '1'], check=True)
+stream_run(rclone_base + ['lsd', cloud(''), '--max-depth', '1'], check=True)
 print('All storage is relative to MMCQA folder ID:', root_id)
 ''')]
 
@@ -98,8 +129,8 @@ The download location is automatically derived from ROOT_FOLDER_ID.
 if USE_DRIVE_DATA:
     copy(cloud('task6-data/raw'), 'data/raw')
 else:
-    subprocess.run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'download'], check=True)
-subprocess.run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=True)
+    stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'download'], check=True)
+stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=True)
 ''')]
 
 gpu_setup = setup + [md('''## Install GPU environment
@@ -109,7 +140,7 @@ Restart the runtime if requested, then rerun clone/setup. GPU training has not b
 !nvidia-smi
 '''), code('''# Fail early on dependency/import errors before downloading data or starting training.
 import subprocess, sys
-result = subprocess.run([sys.executable, '-c', """
+stream_run([sys.executable, '-c', """
 from importlib.metadata import version
 for name in ('numpy', 'torch', 'transformers', 'peft', 'trl', 'ms-swift', 'vllm'):
     print(name, version(name), flush=True)
@@ -120,9 +151,7 @@ import qwen_vl_utils
 import decord
 from vllm import LLM
 print('Training imports OK', flush=True)
-"""], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-print(result.stdout)
-result.check_returncode()
+"""])
 ''')] + storage + data_setup + [md('''## Experiment settings
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
 Intermediate checkpoints stay on local SSD; only the selected final adapter uploads after successful training.
@@ -156,7 +185,7 @@ def run(module, config, overrides, local_output, cloud_subdir):
     cmd = [sys.executable, '-m', module, '--config', config]
     for key, value in overrides.items():
         cmd += ['--set', f'{key}={json.dumps(value)}']
-    subprocess.run(cmd, check=True)
+    stream_run(cmd, check=True)
     if not (Path(local_output) / 'final/adapter_config.json').is_file():
         raise FileNotFoundError('Training finished without a final adapter; nothing uploaded')
     upload_run(local_output, cloud_subdir)
@@ -170,7 +199,7 @@ Only compressed archives and labels are uploaded. All later notebooks use the sa
 !python -m mmcultureqa.data.prepare prepare
 '''), code('''filters = ['--exclude', '.cache/**', '--exclude', 'train/**', '--exclude', 'dev/**', '--exclude', 'devtest/**']
 copy('data/raw', cloud('task6-data/raw'), *filters)
-subprocess.run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
+stream_run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
                 '--one-way', '--size-only', *filters], check=True)
 print('Dataset ready under MMCQA/task6-data/raw')
 ''')]
@@ -248,7 +277,7 @@ cmd = [sys.executable, '-m', 'mmcultureqa.evaluate', '--run-dir', str(validation
 cmd += ['--backend', 'transformers' if USE_4BIT else 'vllm']
 if VAL_LIMIT is not None:
     cmd += ['--limit', str(VAL_LIMIT)]
-result = subprocess.run(cmd)
+result = stream_run(cmd, check=False)
 upload_run(validation_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 result.check_returncode()
 '''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable))]
@@ -296,7 +325,7 @@ if test_rows and all(row.get('answer') for row in test_rows):
     gold = predictions / f'{SPLIT}_gold_en.jsonl'
     write_jsonl(gold, test_rows)
     for label in ADAPTER_STAGES:
-        subprocess.run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
+        stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
                         '--gold', str(gold), '--lang', 'en',
                         '--pred', str(predictions / f'{label}_{SPLIT}.jsonl'),
                         '--out', str(predictions / f'{label}_{SPLIT}_scores.json')], check=True)
