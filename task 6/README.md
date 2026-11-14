@@ -28,13 +28,24 @@ MMCQA/                           ← ROOT_FOLDER_ID
 ```
 
 1. `01_hf_to_drive_rclone.ipynb`: tải từ Hugging Face trên Colab, upload nhãn/ZIP vào `task6-data/raw` bên dưới root.
-2. `02_sft_colab.ipynb`: copy dữ liệu về SSD, chỉ train SFT; tự upload checkpoint sau mỗi lần save và upload adapter final khi subprocess kết thúc. Có thể đóng phiên sau khi upload hoàn tất.
-3. `03_grpo_colab.ipynb`: setup tương tự, chỉ train GRPO. Chọn `SFT_RUN_NAME`, `INPUT_SFT_STAGE`, `SFT_CHECKPOINT` (mặc định theo cùng run và chế độ smoke/full); đường dẫn adapter tự suy ra từ root. Adapter SFT copy về SSD và LoRA được cập nhật tiếp.
-4. `04_inference_colab.ipynb`: tải các adapter từ root, inference và chấm điểm độc lập, tự upload kết quả vào `predictions`.
+2. `02_sft_colab.ipynb`: train SFT, upload checkpoint/adapter, sau đó **inference toàn bộ validation và chấm scorer chính thức**, lưu `validation/scores.json` và predictions lên Drive.
+3. `03_grpo_colab.ipynb`: chỉ train GRPO tiếp từ SFT; chọn `SFT_RUN_NAME`, `INPUT_SFT_STAGE`, `SFT_CHECKPOINT`. Cuối cùng **inference toàn bộ validation và chấm scorer chính thức**, lưu kết quả riêng bên trong run GRPO.
+4. `04_inference_colab.ipynb`: chỉ inference test (`devtest` mặc định), tự upload predictions. Nếu không có nhãn công khai thì chỉ xuất file nộp, không tính điểm local. Không dùng notebook này để chấm validation.
 
 Mỗi notebook clone repo `iamtro-2006/semeval` và cài package trong `task 6/`. Không ZIP/upload code. Dùng cùng `ROOT_FOLDER_ID` trong các phiên để đồng bộ. File rclone gốc không bị sửa; dùng bản sao tạm để refresh token. Nếu config nằm trên Drive thì chạy cell mount tùy chọn chỉ để đọc config.
 
 `RUN_FULL=False` mặc định chạy thử một optimizer step; full run dùng tên experiment mới và `RUN_FULL=True`. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'`, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
+
+Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT full run vẫn chọn checkpoint bằng eval_loss, GRPO vẫn chưa chọn checkpoint bằng điểm val.
+
+Chạy lại đánh giá adapter cuối từ CLI, không train lại:
+
+```bash
+python -m mmcultureqa.evaluate --run-dir outputs/sft
+python -m mmcultureqa.evaluate --run-dir outputs/grpo
+```
+
+Evaluator dùng prompt/model settings đã lưu trong `run.json`, kiểm tra manifest không đổi và train/val không trùng ID/ảnh, sinh đáp án rồi chấm scorer trong hai subprocess để giải phóng VRAM giữa VLM và mmBERT. Chỉ đọc gold để chấm; gold không đưa vào prompt.
 
 Training và ảnh dùng SSD local; rclone copy checkpoint theo lịch save và cuối stage. Nếu Colab bị ngắt đột ngột, chỉ checkpoint đã upload xong mới phục hồi được. Remote dùng `copy`, không xóa checkpoint cũ trên Drive; save_total_limit chỉ giới hạn bản local. CLI ngoài notebook vẫn hoạt động bình thường, không sync nếu không cấu hình môi trường callback.
 

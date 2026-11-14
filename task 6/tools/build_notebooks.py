@@ -200,10 +200,34 @@ run('mmcultureqa.training.grpo', 'configs/grpo.yaml', grpo_args, GRPO, f'task6-r
 print('GRPO adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{GRPO_STAGE}/final'))
 ''')]
 
-inference_notebook = gpu_setup + [md('''## Inference and scoring only
+def final_validation(run_variable, stage_variable):
+    return [md('''## Final held-out validation score
+Generate answers with the saved final adapter and score with the unchanged official scorer.
+Default: ALL 1,000 validation examples, even after a one-step training smoke run.
+Set VAL_LIMIT=4 only to smoke-test evaluation; subset results are explicitly marked.
+BERTScore-F1 is the ranking metric, not exact-match accuracy. No weights are updated.
+'''), code('''VAL_LIMIT = None  # full validation; optionally 4 for an evaluation smoke test
+validation_run = Path(__RUN_DIR__)
+cmd = [sys.executable, '-m', 'mmcultureqa.evaluate', '--run-dir', str(validation_run)]
+if VAL_LIMIT is not None:
+    cmd += ['--limit', str(VAL_LIMIT)]
+result = subprocess.run(cmd)
+copy(validation_run, cloud(f'task6-runs/{RUN_NAME}/{__STAGE__}'))
+result.check_returncode()
+'''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable))]
+
+sft_notebook += final_validation('SFT', 'SFT_STAGE')
+grpo_notebook += final_validation('GRPO', 'GRPO_STAGE')
+
+inference_notebook = gpu_setup + [md('''## Test inference only
 Select run/stage names below. No manual Drive filesystem paths are needed.
+Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
+Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
 '''), code('''INPUT_RUN_NAME = RUN_NAME
-SPLIT = 'dev'  # devtest for unlabelled predictions
+SPLIT = 'devtest'
+TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test
+if SPLIT not in {'devtest', 'test'}:
+    raise ValueError('Use devtest/test here; validation is evaluated in the training notebooks')
 ADAPTER_STAGES = {'sft': SFT_STAGE, 'grpo': GRPO_STAGE}
 predictions = RUNS / 'predictions'
 for label, stage in ADAPTER_STAGES.items():
@@ -211,19 +235,24 @@ for label, stage in ADAPTER_STAGES.items():
     copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{stage}/final'), adapter)
     overrides = {**common, 'model.adapter': str(adapter), 'model.adapter_revision': None,
                  'inference.split': SPLIT, 'inference.output': str(predictions / f'{label}_{SPLIT}.jsonl')}
-    if not RUN_FULL:
-        overrides['data.limit'] = 4
+    overrides['data.limit'] = TEST_LIMIT
     run('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides,
         predictions, f'task6-runs/{RUN_NAME}/predictions')
-'''), code('''if RUN_FULL and SPLIT == 'dev':
+'''), code('''from mmcultureqa.common import read_jsonl, write_jsonl
+test_rows = read_jsonl(Path('data/prepared') / f'{SPLIT}.jsonl')
+if TEST_LIMIT is not None:
+    test_rows = test_rows[:TEST_LIMIT]
+if test_rows and all(row.get('answer') for row in test_rows):
+    gold = predictions / f'{SPLIT}_gold_en.jsonl'
+    write_jsonl(gold, test_rows)
     for label in ADAPTER_STAGES:
         subprocess.run([sys.executable, 'vendor/organizer/scorer/score.py',
-                        '--gold', 'data/raw/qa/mena/dev_en.jsonl',
-                        '--pred', str(predictions / f'{label}_dev.jsonl'),
-                        '--out', str(predictions / f'{label}_scores.json')], check=True)
+                        '--gold', str(gold), '--lang', 'en',
+                        '--pred', str(predictions / f'{label}_{SPLIT}.jsonl'),
+                        '--out', str(predictions / f'{label}_{SPLIT}_scores.json')], check=True)
     copy(predictions, cloud(f'task6-runs/{RUN_NAME}/predictions'))
 else:
-    print('Scoring skipped: smoke subset or unlabelled split.')
+    print(f'{SPLIT} has no public answers. Predictions saved for submission; no local score available.')
 ''')]
 
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),

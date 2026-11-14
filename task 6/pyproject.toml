@@ -13,6 +13,7 @@ mmcqa-data = "mmcultureqa.data.prepare:main"
 mmcqa-sft = "mmcultureqa.training.sft:main"
 mmcqa-grpo = "mmcultureqa.training.grpo:main"
 mmcqa-infer = "mmcultureqa.inference.predict:main"
+mmcqa-evaluate = "mmcultureqa.evaluate:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
