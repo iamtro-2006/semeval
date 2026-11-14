@@ -5,9 +5,23 @@ Pipeline riêng trong `D:\semeval\task 6`, không thay đổi Task 8. SFT dùng 
 ## Bắt đầu trên Colab
 
 1. Mở `notebooks/01_hf_to_drive_rclone.ipynb` trên Colab CPU. Cell đầu clone `https://github.com/iamtro-2006/semeval.git`, checkout `GIT_REF`, vào `task 6/` và cài package. Notebook tải English QA trực tiếp từ Hugging Face rồi dùng rclone copy archive và nhãn lên Google Drive. Trong cell cấu hình, sửa `RCLONE_CONFIG_PATH`, `REMOTE`, `ROOT_FOLDER_ID` và `DESTINATION_SUBDIR`. Notebook dùng bản sao tạm của config, không sửa file gốc.
-2. Mở `notebooks/02_sft_grpo_inference_colab.ipynb` trên Colab GPU. Cell đầu cũng clone repo này. Notebook copy archive từ Drive sang SSD Colab, giải nén, prepare dữ liệu, chạy SFT → GRPO → inference → scorer.
-3. Để `RUN_FULL=False` cho lượt thử 1 optimizer step mỗi phương pháp. Sau khi xác nhận chạy được, dùng tên experiment mới và `RUN_FULL=True`. Smoke không phải kết quả thực nghiệm.
-4. Checkpoint lưu vào Drive; ảnh và xử lý dữ liệu ở SSD Colab. Các cell chạy trong subprocess nên GPU được giải phóng giữa các stage. Khi Colab yêu cầu restart sau cài package, restart rồi chạy lại setup.
+2. Mở `notebooks/02_sft_colab.ipynb` trên Colab GPU. Chạy setup rồi **chỉ train SFT**. Checkpoint định kỳ và adapter `final` được ghi trực tiếp vào Drive. Cell cuối in đường dẫn adapter để dùng ở bước tiếp theo; có thể kết thúc phiên Colab.
+3. Mở `notebooks/03_grpo_colab.ipynb` trong phiên GPU riêng. Setup giống notebook SFT, nhưng **chỉ train GRPO**. Sửa `SFT_ADAPTER` thành đường dẫn adapter SFT trên Drive; GRPO cập nhật tiếp LoRA đó và lưu vào thư mục GRPO riêng. Không cần chạy lại SFT.
+4. Mở `notebooks/04_inference_colab.ipynb` để inference/chấm điểm độc lập. Sửa các đường dẫn SFT/GRPO trên Drive muốn so sánh. Notebook này không train.
+5. Để `RUN_FULL=False` cho lượt thử 1 optimizer step. Sau khi xác nhận chạy được, dùng tên experiment mới và `RUN_FULL=True`. Smoke không phải kết quả thực nghiệm. Khi chạy GRPO đầy đủ, nhớ chọn adapter của lượt SFT đầy đủ.
+6. Checkpoint lưu vào Drive; ảnh và xử lý dữ liệu ở SSD Colab. Khi Colab yêu cầu restart sau cài package, restart rồi chạy lại setup.
+
+Luồng checkpoint giữa hai phiên độc lập:
+
+```text
+02_sft_colab → Drive/.../sft/final
+                              ↓ SFT_ADAPTER
+03_grpo_colab → Drive/.../grpo/final
+                              ↓
+04_inference_colab → predictions và scores trên Drive
+```
+
+`final` là adapter + processor, không chứa bản sao toàn bộ base model. Muốn **resume cùng một stage** với optimizer/scheduler, dùng `resume_from_checkpoint=.../checkpoint-N`; muốn **chuyển SFT sang GRPO**, dùng `model.adapter`/`SFT_ADAPTER`, khởi tạo optimizer GRPO mới.
 
 Notebook lấy code trực tiếp từ GitHub; không đóng gói hay upload ZIP code. Sửa `REPO_URL` và `GIT_REF` trong notebook để chọn repo/branch/commit. Khi chỉnh generator, sinh lại notebook:
 

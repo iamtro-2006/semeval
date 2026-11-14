@@ -209,7 +209,58 @@ else:
     print('Scoring skipped: smoke subset or unlabelled split.')
 ''')]
 
-for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_grpo_inference_colab', experiment)]:
+# Keep the same clone/install/Drive/data/config cells in each independent session.
+# Only the stage-specific cells differ. Never run SFT again inside the GRPO notebook.
+sft_notebook = experiment[:11] + [md('''## 5. SFT checkpoint on Drive
+Training writes periodic checkpoints and the final adapter directly to Drive.
+`final` contains adapter + processor; base Qwen weights are downloaded separately.
+Copy the printed path into SFT_ADAPTER in notebook 03. You may end this Colab session.
+For SFT resume, set resume_from_checkpoint to a checkpoint-N directory in the SFT run cell.
+'''), code('''SFT_FINAL = Path(SFT) / 'final'
+if not (SFT_FINAL / 'adapter_config.json').is_file():
+    raise FileNotFoundError(f'SFT did not produce a final adapter: {SFT_FINAL}')
+print('SFT adapter saved on Drive:', SFT_FINAL)
+print('Use this path as SFT_ADAPTER in notebook 03.')
+''')]
+
+grpo_notebook = experiment[:9] + [md('''## 4. Choose the SFT checkpoint saved on Drive
+Run this notebook in a new GPU session after notebook 02. No SFT is run here.
+Set SFT_ADAPTER to the final adapter path printed by notebook 02, or to an SFT checkpoint-N.
+RUN_NAME above controls the GRPO output path; SFT_ADAPTER independently selects its input.
+Use a full SFT run as input for a real experiment; a smoke adapter only verifies the pipeline.
+'''), code('''SFT_ADAPTER = '/content/drive/MyDrive/MMCQA/task6-runs/experiment01/sft-smoke/final'
+ADAPTER_REVISION = 'null'  # local Drive adapter, no Hub revision
+
+sft_input = Path(SFT_ADAPTER)
+if not (sft_input / 'adapter_config.json').is_file():
+    raise FileNotFoundError(f'Set SFT_ADAPTER to an existing SFT adapter on Drive: {sft_input}')
+if not any((sft_input / name).is_file() for name in ['adapter_model.safetensors', 'adapter_model.bin']):
+    raise FileNotFoundError('SFT adapter weights are missing; wait for the SFT save to complete')
+if sft_input.resolve() == (Path(GRPO) / 'final').resolve() or Path(GRPO).resolve() in sft_input.resolve().parents:
+    raise ValueError('Choose a GRPO output directory separate from the input SFT run')
+print('Input SFT adapter:', SFT_ADAPTER)
+print('GRPO output on Drive:', GRPO)
+''')] + experiment[13:15] + [code('''GRPO_FINAL = Path(GRPO) / 'final'
+if not (GRPO_FINAL / 'adapter_config.json').is_file():
+    raise FileNotFoundError(f'GRPO did not produce a final adapter: {GRPO_FINAL}')
+print('GRPO adapter saved on Drive:', GRPO_FINAL)
+''')]
+
+inference_notebook = experiment[:9] + [md('''## 4. Select trained adapters for inference
+This notebook runs no training. Choose existing SFT and GRPO paths on Drive.
+Set RUN_FULL=True above for full-split predictions and scoring, or False for 4-row inference.
+'''), code('''SFT_ADAPTER = '/content/drive/MyDrive/MMCQA/task6-runs/experiment01/sft-smoke/final'
+GRPO_RUN = '/content/drive/MyDrive/MMCQA/task6-runs/experiment01/grpo-smoke'
+GRPO = GRPO_RUN
+ADAPTER_REVISION = 'null'
+''')] + experiment[15:]
+
+for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
+                    ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook)]:
+    titles = {'01_hf_to_drive_rclone': '# Task 6 · Hugging Face → Drive',
+              '02_sft_colab': '# Task 6 · SFT only', '03_grpo_colab': '# Task 6 · GRPO only',
+              '04_inference_colab': '# Task 6 · Inference and scoring only'}
+    cells = [md(''.join(cells[0]['source']).replace('# Task 6 · English QA', titles[name], 1))] + cells[1:]
     target = ROOT / 'notebooks' / f'{name}.ipynb'
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({'cells': cells, 'metadata': {'kernelspec': {'display_name': 'Python 3',
