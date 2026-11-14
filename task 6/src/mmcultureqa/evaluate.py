@@ -12,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run-dir', required=True)
     parser.add_argument('--limit', type=int, default=None, help='Omit to score all validation rows')
+    parser.add_argument('--backend', choices=['vllm', 'transformers'], default=None)
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         parser.error('--limit must be positive')
@@ -45,8 +46,13 @@ def main():
                         processor=str(adapter), processor_revision=None)
     cfg['data']['limit'] = args.limit
     predictions = output / 'predictions.jsonl'
-    cfg['inference'] = {'split': split, 'batch_size': 1, 'max_new_tokens': 256,
+    import yaml
+    defaults = yaml.safe_load((ROOT / 'configs/inference.yaml').read_text(encoding='utf-8'))['inference']
+    cfg['inference'] = {**defaults, 'split': split,
+                        'max_new_tokens': cfg.get('monitor', {}).get('max_new_tokens', 256),
                         'do_sample': False, 'output': str(predictions), 'resume': True}
+    if args.backend:
+        cfg['inference']['backend'] = args.backend
     # JSON is valid YAML. Reuse the exact saved training prompt and model settings.
     frozen_prompt = output / 'prompt.txt'
     frozen_prompt.write_text(cfg['prompt_text'], encoding='utf-8')

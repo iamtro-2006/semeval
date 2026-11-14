@@ -25,14 +25,18 @@ def score_texts(predictions, references, settings):
     result = {key: [0.0] * len(predictions) for key in ('precision', 'recall', 'f1')}
     valid = [i for i, text in enumerate(predictions) if text]
     if valid:
-        scorer = get_scorer(json.dumps({k: settings[k] for k in
-            ('model', 'revision', 'num_layers', 'batch_size', 'device')}, sort_keys=True))
+        scorer = preload_scorer(settings)
         with torch.inference_mode():
             values = scorer.score([predictions[i] for i in valid], [references[i] for i in valid])
         for key, tensor in zip(result, values):
             for index, value in zip(valid, tensor.tolist()):
                 result[key][index] = float(value)
     return result
+
+
+def preload_scorer(settings):
+    return get_scorer(json.dumps({k: settings[k] for k in
+        ('model', 'revision', 'num_layers', 'batch_size', 'device')}, sort_keys=True))
 
 
 def register_plugins(cfg):

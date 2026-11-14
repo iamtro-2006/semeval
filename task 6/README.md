@@ -120,7 +120,7 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set model.load_
 python -m mmcultureqa.training.sft --config configs/sft.yaml --set resume_from_checkpoint=outputs/sft/checkpoint-100
 ```
 
-Full precision là default ở YAML. Notebook bật 4-bit một cách tường minh để thử trên GPU ít VRAM; không tự động lượng tử hóa, giảm pixel hay cắt chuỗi khi OOM. Dtype auto chọn BF16 nếu GPU hỗ trợ, nếu không FP16. Số generation, batch và gradient accumulation phải phù hợp quy tắc chia nhóm của GRPO; default 1 GPU: batch 1 × accumulation 4, group 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
+Mặc định cả YAML và notebook dùng **BF16, không 4-bit** (`USE_4BIT=False`). GPU phải hỗ trợ BF16; không tự fallback sang FP16/4-bit khi thiếu bộ nhớ. mmBERT reward/monitor chạy CUDA, batch 4 và giữ FP32 theo cấu hình scorer chính thức. Số generation, batch và gradient accumulation phải phù hợp quy tắc chia nhóm của GRPO; default 1 GPU: batch 1 × accumulation 4, group 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
 
 ## Monitoring theo ms-swift
 
@@ -145,6 +145,19 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.pr
 
 `monitor.limit=null` dùng toàn bộ val, độc lập `data.limit` của train. `monitor.max_new_tokens` và `monitor.device` chỉnh generation metric SFT; reward GRPO chỉnh trong `reward`. Trong smoke notebook vẫn tắt evaluation SFT định kỳ (một step), nhưng đánh giá cuối giữ nguyên. Bước đánh giá cuối của cả hai stage luôn sinh đáp án và chấm scorer chính thức, không phụ thuộc flag monitor.
 
+## BF16 + GPU mmBERT + vLLM mặc định
+
+- SFT/GRPO: Qwen3-VL-4B BF16 + LoRA, không lượng tử hóa nền. GPU không hỗ trợ BF16 sẽ báo lỗi rõ ràng.
+- mmBERT dùng CUDA FP32 để giữ cách tính metric; scorer được preload trước khi vLLM profile bộ nhớ và cache để dùng lại. SFT không generation không load mmBERT không dùng đến; bật generation mới load scorer.
+- GRPO: `use_vllm=true`, colocate, LoRA weight sync, `sleep_level=1`, prefix caching, tối đa 4 sequence, context 2048. vLLM chiếm ngân sách 0.45 tổng VRAM; model/optimizer training không offload mặc định.
+- vLLM có bản model phục vụ rollout riêng. Trên L4 24 GB, BF16 training + vLLM + mmBERT có thể chạm giới hạn VRAM dù chỉ load Qwen + mmBERT thì đủ. Sleep giải phóng vLLM giữa rollout và bước train. Đây là cấu hình khởi đầu chưa benchmark, không bảo đảm nhanh nhất hay luôn đủ 24 GB. Không tự giảm chất lượng để né OOM.
+- `training.vllm_max_model_len=2048` là giới hạn context phục vụ rollout, không phải lệnh cắt prompt. Prompt + ảnh + đáp án phải vừa giới hạn; nếu tăng prompt/ảnh, điều chỉnh cấu hình và đo VRAM. Các mẫu QA hiện có mặc định ngắn hơn nhiều mức này.
+- Nếu cần thêm bộ nhớ, bật `training.offload_model=true` theo cơ chế ms-swift, đổi VRAM lấy thời gian chuyển CPU/GPU; hoặc dùng GPU lớn hơn. Muốn tắt vLLM đặt `training.use_vllm=false`.
+- Final/test inference: vLLM standalone, batch 8, tối đa 8 sequence, context 2048, memory utilization 0.8. Model được giải phóng trước khi subprocess scorer chính thức chạy, không giữ thêm optimizer để chấm cuối.
+- Pin `vllm==0.11.0`, khớp torch/torchaudio 2.8.0 và torchvision 0.23.0. Dùng Colab Linux x86_64; restart runtime nếu cài lại bộ torch/vLLM yêu cầu. Không cài vLLM mới nhất đè lên bộ pin.
+
+Các knobs trong YAML vẫn chỉnh được. Khi chọn 4-bit ở notebook, standalone inference/final validation dùng backend Transformers; recipe vLLM hiện tại chỉ hỗ trợ BF16.
+
 ## Điều kiện huấn luyện
 
 - Dataset export sang schema native ms-swift: messages + images; GRPO có thêm solution chỉ cho reward. SFT dùng template qwen3_vl và loss_scale=default của ms-swift để mask user/system/image/padding. Không dùng custom SFT collator cũ.
@@ -154,7 +167,7 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.pr
 - Plugin mmBERT pin model/revision/layer, IDF off, no rescaling, fast tokenizer và giới hạn 512. Empty answer nhận 0. Scorer cache theo cấu hình để tránh tải lại mỗi batch. Giữ nguyên scorer cuối chính thức trong vendor.
 - native arguments được lưu trong swift_arguments.json. Khóa `swift` trong YAML cho phép override trực tiếp các tham số TrainArguments/RLHFArguments; framework sẽ báo lỗi nếu tên tham số không hợp lệ. Cấu hình native override có quyền ưu tiên, vì vậy chỉ đổi khi hiểu tác động.
 - Adapter/checkpoint được ms-swift lưu; hook project chỉ chuẩn hóa base-model identifier trong metadata và đồng bộ Drive. Adapter `final` không chứa base weights. Checkpoint có optimizer/scheduler dùng để resume cùng stage.
-- Inference cuối vẫn dùng runner Transformers đã có, cùng base revision, processor và giới hạn pixel; không chạy đồng thời hai bản VLM trong VRAM để monitor.
+- Final validation và standalone test inference mặc định dùng VllmEngine của ms-swift, cùng pinned base revision và LoRA. Backend Transformers vẫn chọn được qua inference.backend. SFT generation monitor trong lúc train vẫn dùng Transformers theo cơ chế native ms-swift; vLLM tăng tốc rollout GRPO và inference ngoài train.
 
 ## Dùng adapter SFT đã công bố
 

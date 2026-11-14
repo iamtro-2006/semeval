@@ -67,6 +67,8 @@ def build_arguments(cfg, stage):
             from huggingface_hub import snapshot_download
             adapter = Path(snapshot_download(mc['adapter'], revision=mc.get('adapter_revision')))
         args['adapters'] = [str(adapter)]
+        adapter_config = json.loads((adapter / 'adapter_config.json').read_text())
+        args['lora_rank'] = max(cfg['peft']['r'], adapter_config['r'])
     if cfg.get('resume_from_checkpoint'):
         args['resume_from_checkpoint'] = str(path(cfg['resume_from_checkpoint']))
     if stage == 'sft':
@@ -80,6 +82,11 @@ def build_arguments(cfg, stage):
             raise ValueError('reward.type must be mmbert or exact')
         for key in ('num_generations', 'max_completion_length', 'temperature', 'top_p', 'beta', 'loss_type', 'use_vllm'):
             args[key] = tc[key]
+        for key in ('vllm_mode', 'vllm_enable_lora', 'vllm_gpu_memory_utilization', 'vllm_max_model_len',
+                    'vllm_max_num_seqs', 'vllm_enable_prefix_caching', 'vllm_limit_mm_per_prompt',
+                    'sleep_level', 'offload_model', 'offload_optimizer'):
+            if key in tc:
+                args[key] = tc[key]
         args.update(rlhf_type='grpo', reward_funcs=['mmcqa_bertscore' if cfg['reward']['type'] == 'mmbert' else 'mmcqa_exact'],
                     overlong_filter=tc.get('mask_truncated_completions', True),
                     load_best_model_at_end=False, metric_for_best_model='reward', greater_is_better=True)
@@ -106,6 +113,8 @@ def train(cfg, stage):
     dtype = cfg['model'].get('dtype', 'auto')
     if dtype == 'auto':
         dtype = 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
+    if dtype == 'bfloat16' and not torch.cuda.is_bf16_supported():
+        raise RuntimeError('BF16 is required by this configuration; select a BF16-capable GPU such as L4')
     cfg['_dtype'] = cfg['model']['dtype'] = dtype
     cfg['_framework'] = 'ms-swift==3.11.3'
     os.environ.update(MAX_PIXELS=str(cfg['model']['max_pixels']), MIN_PIXELS=str(cfg['model']['min_pixels']))
@@ -116,6 +125,13 @@ def train(cfg, stage):
     from .swift_metrics import register_plugins
     from ..storage import checkpoint_callbacks
     register_plugins(cfg)
+    # Reserve scorer memory before vLLM profiles the GPU. Reuse this cached encoder
+    # for every reward/metric call; keep FP32 to preserve organizer scoring settings.
+    from .swift_metrics import preload_scorer
+    if stage == 'grpo' and cfg['reward']['type'] == 'mmbert':
+        preload_scorer(cfg['reward'])
+    elif stage == 'sft' and cfg['training'].get('predict_with_generate', False):
+        preload_scorer(cfg['monitor'])
     native = build_arguments(cfg, stage)
     if cfg['model'].get('load_in_4bit'):
         native['bnb_4bit_compute_dtype'] = dtype

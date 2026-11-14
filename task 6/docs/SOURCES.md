@@ -23,3 +23,10 @@ Training backend migrated to ms-swift **v3.11.3**, source commit `96d08aa09907e4
 - https://github.com/modelscope/ms-swift/blob/v3.11.3/requirements/framework.txt
 
 The pinned version supports Qwen3-VL and constrains transformers<4.58, trl<0.25, peft<0.19, datasets<4. Dependency pins follow those constraints (datasets changed to 3.6.0). Metric/reward plugins use v3.11.3's metric_mapping and orms, not the different 4.x plugin API. Native ms-swift owns templates, masking, optimizer, accumulation, rollout, loss and evaluation. SFT without generation is the default. No GPU execution has been completed locally.
+
+
+vLLM default update:
+- https://github.com/vllm-project/vllm/blob/v0.11.0/requirements/cuda.txt (torch 2.8.0, torchvision 0.23.0)
+- https://docs.vllm.ai/en/v0.11.0/models/supported_models.html (Qwen3-VL LoRA support)
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/trainers/rlhf_trainer/rollout_mixin.py (colocate, LoRA sync, sleep)
+- https://github.com/modelscope/ms-swift/blob/v3.11.3/swift/llm/infer/infer_engine/vllm_engine.py (standalone inference API)

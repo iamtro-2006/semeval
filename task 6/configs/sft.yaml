@@ -4,7 +4,7 @@ model:
   adapter: null
   adapter_revision: null
   processor: null
-  dtype: auto
+  dtype: bfloat16
   load_in_4bit: false
   attn_implementation: sdpa
   min_pixels: 65536
@@ -55,8 +55,8 @@ monitor:
   model: jhu-clsp/mmBERT-base
   revision: c5955035435e2bf121cde7f3c8863ef52ff35d82
   num_layers: 17
-  device: cpu
-  batch_size: 16
+  device: cuda
+  batch_size: 4
   limit: null
   max_new_tokens: 256
 swift: {}  # optional native ms-swift TrainArguments/RLHFArguments overrides

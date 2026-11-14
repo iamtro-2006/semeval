@@ -111,8 +111,11 @@ Restart the runtime if requested, then rerun clone/setup. GPU training has not b
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
 Periodic checkpoints upload after each save; final adapter uploads after training finishes.
 Local SSD is used for training and inference. A disconnected runtime can only recover checkpoints already uploaded.
+Default: native BF16 LoRA, CUDA mmBERT; GRPO uses vLLM colocate with sleep enabled.
+SFT's optional in-training generation monitor uses the native ms-swift Transformers path.
+Final validation/test inference uses vLLM. This is an unbenchmarked 24 GB starting configuration.
 '''), code('''import json
-USE_4BIT = True
+USE_4BIT = False
 PREDICT_WITH_GENERATE = False  # default SFT: val loss + token accuracy; True: generation + mmBERT
 RUN_FULL = False
 RUN_NAME = 'experiment01'
@@ -124,7 +127,8 @@ SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
 GRPO_STAGE = 'grpo' if RUN_FULL else 'grpo-smoke'
 SFT = str(RUNS / SFT_STAGE)
 GRPO = str(RUNS / GRPO_STAGE)
-common = {'model.load_in_4bit': USE_4BIT, 'training.predict_with_generate': PREDICT_WITH_GENERATE}
+common = {'model.dtype': 'bfloat16', 'model.load_in_4bit': USE_4BIT,
+          'training.predict_with_generate': PREDICT_WITH_GENERATE}
 
 def run(module, config, overrides, local_output, cloud_subdir):
     cmd = [sys.executable, '-m', module, '--config', config]
@@ -217,6 +221,7 @@ BERTScore-F1 is the ranking metric, not exact-match accuracy. No weights are upd
 '''), code('''VAL_LIMIT = None  # full validation; optionally 4 for an evaluation smoke test
 validation_run = Path(__RUN_DIR__)
 cmd = [sys.executable, '-m', 'mmcultureqa.evaluate', '--run-dir', str(validation_run)]
+cmd += ['--backend', 'transformers' if USE_4BIT else 'vllm']
 if VAL_LIMIT is not None:
     cmd += ['--limit', str(VAL_LIMIT)]
 result = subprocess.run(cmd)
@@ -242,6 +247,7 @@ for label, stage in ADAPTER_STAGES.items():
     adapter = Path('outputs/inputs/inference') / INPUT_RUN_NAME / stage / 'final'
     copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{stage}/final'), adapter)
     overrides = {**common, 'model.adapter': str(adapter), 'model.adapter_revision': None,
+                 'inference.backend': 'transformers' if USE_4BIT else 'vllm',
                  'inference.split': SPLIT, 'inference.output': str(predictions / f'{label}_{SPLIT}.jsonl')}
     overrides['data.limit'] = TEST_LIMIT
     run('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides,

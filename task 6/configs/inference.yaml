@@ -2,9 +2,13 @@ extends: configs/sft.yaml
 model:
   adapter: outputs/sft/final
 inference:
+  backend: vllm
   split: dev
-  batch_size: 1
+  batch_size: 8
   max_new_tokens: 256
   do_sample: false
   output: outputs/predictions/sft_dev.jsonl
   resume: true
+  vllm_gpu_memory_utilization: 0.8
+  vllm_max_model_len: 2048
+  vllm_max_num_seqs: 8
