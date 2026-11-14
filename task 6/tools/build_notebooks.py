@@ -107,6 +107,22 @@ Restart the runtime if requested, then rerun clone/setup. GPU training has not b
 '''), code('''%pip -q install -r requirements.txt
 !python -m pip check
 !nvidia-smi
+'''), code('''# Fail early on dependency/import errors before downloading data or starting training.
+import subprocess, sys
+result = subprocess.run([sys.executable, '-c', """
+from importlib.metadata import version
+for name in ('numpy', 'torch', 'transformers', 'peft', 'trl', 'ms-swift', 'vllm'):
+    print(name, version(name), flush=True)
+from transformers.modeling_utils import PreTrainedModel
+from peft import PeftModel
+from swift.llm import TrainArguments, RLHFArguments
+import qwen_vl_utils
+import decord
+from vllm import LLM
+print('Training imports OK', flush=True)
+"""], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+print(result.stdout)
+result.check_returncode()
 ''')] + storage + data_setup + [md('''## Experiment settings
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
 Intermediate checkpoints stay on local SSD; only the selected final adapter uploads after successful training.

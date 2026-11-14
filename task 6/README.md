@@ -191,6 +191,10 @@ Scorer xếp hạng bằng mmBERT BERTScore-F1; các file trong vendor giữ ngu
 
 ## Trạng thái xác minh
 
+Môi trường training pin `numpy==2.2.6` để hỗ trợ Python 3.13 và tránh xung đột với JAX trên Colab. Không tắt backend TensorFlow/JAX. Sau cài đặt, notebook kiểm tra import Transformers, PEFT, ms-swift, qwen-vl-utils, decord và vLLM trước khi tải dữ liệu/train; lỗi sẽ in đầy đủ traceback. Sau khi đổi NumPy trên runtime cũ, restart session rồi chạy lại setup để tránh giữ binary đã import từ phiên bản cũ.
+
+Giữ `decord==0.6.0` vì registry Qwen3-VL của ms-swift 3.11.3 khai báo dependency này; cảnh báo platform của wheel cần đối chiếu với kết quả import thực tế, không mặc định quy lỗi cho Python 3.13. Môi trường Colab có thể còn xung đột các package ngoài pipeline trong `pip check`; chưa có xác minh toàn bộ môi trường Colab/Python 3.13. Bộ requirements scorer organizer trong `vendor/` giữ nguyên và dùng môi trường riêng khi cần tái lập đúng dependency leaderboard.
+
 Đã tải và kiểm tra đủ 12.000 ảnh local, đủ ba JSONL và ba Parquet. Đã kiểm tra cú pháp code/notebook, manifest và cấu hình trên CPU. Máy phát triển không có GPU: chưa chạy forward/backward Qwen3-VL, chưa xác nhận loss/gradient trên GPU, chưa chạy thực nghiệm Colab và chưa có kết quả chứng minh GRPO cải thiện. Notebook cung cấp lượt thử GPU để xác nhận trước full run.
 
 Tham khảo API theo phiên bản được pin: `docs/SOURCES.md`.
