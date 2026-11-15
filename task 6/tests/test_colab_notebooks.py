@@ -284,6 +284,7 @@ print(ROOT)
         self.assertEqual(args['bnb_4bit_compute_dtype'], 'bfloat16')
         self.assertEqual(args['train_type'], 'lora')
         self.assertFalse(args['use_vllm'])
+        self.assertIsNone(args['vllm_mode'])
         self.assertFalse(args['offload_model'])
         self.assertFalse(args['offload_optimizer'])
         self.assertEqual(args['sleep_level'], 0)
@@ -315,6 +316,17 @@ print(ROOT)
             cfg['swift'] = {'per_device_eval_batch_size': 1}
             with self.assertRaisesRegex(ValueError, 'eval batch'):
                 build_arguments(cfg, 'grpo')
+
+    def test_transformers_rollout_clears_stale_vllm_mode(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.training.swift_backend import build_arguments
+        with patch.dict(os.environ, WORLD_SIZE='1'):
+            cfg['training']['vllm_mode'] = 'colocate'
+            self.assertIsNone(build_arguments(cfg, 'grpo')['vllm_mode'])
+            cfg['swift'] = {'vllm_mode': 'server'}
+            self.assertIsNone(build_arguments(cfg, 'grpo')['vllm_mode'])
+            cfg['swift'] = {'use_vllm': True, 'vllm_mode': 'colocate'}
+            self.assertEqual(build_arguments(cfg, 'grpo')['vllm_mode'], 'colocate')
 
     def test_quantized_evaluator_automatically_selects_transformers(self):
         cfg = self.grpo_config()

@@ -6,6 +6,7 @@
 - ms-swift 3.11.3's non-vLLM branch was checked: `PtEngine.from_model_template(self.model, ...)` reuses the training model. No second Qwen engine is constructed on this path; mmBERT remains a separate reward encoder.
 - Single-GPU recipe: train microbatch 4, accumulation 4, steps_per_generation 4, 16 rollout completions / 4 questions, eval batch 8, num_generations 4. Eval grouping and generation grouping are validated before GPU model allocation.
 - CPU regressions check actual inherited YAML -> native arguments, NF4/BF16 flags, grouping after overrides, separate SFT input/QLoRA output runs, optional vLLM install/import checks, and Transformers selection for final validation.
+- Disabled-vLLM native arguments explicitly set `vllm_mode=None`, including after stale mode overrides. The actual `_init_rollout` method extracted from pinned ms-swift 3.11.3 source was executed with the Transformers flags to verify its mode guard accepts this combination; full GPU initialization remains untested.
 - GPU quantized loading, generation/backward, batch-4 VRAM fitting, numerical quality and speed vs the previous BF16/vLLM recipe have not been benchmarked. A CPU test pass does not establish a sub-eight-hour runtime.
 
 ## Earlier dataset and backend checks

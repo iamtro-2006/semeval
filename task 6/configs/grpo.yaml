@@ -26,7 +26,7 @@ training:
   loss_type: dr_grpo
   mask_truncated_completions: true
   use_vllm: false  # reuse the quantized training model through native Transformers/PtEngine
-  vllm_mode: colocate
+  vllm_mode: null  # ms-swift requires None when use_vllm is false
   vllm_enable_lora: false
   vllm_gpu_memory_utilization: 0.45
   vllm_max_model_len: 2048

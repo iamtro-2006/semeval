@@ -197,7 +197,7 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.pr
 
 ## QLoRA GRPO và backend generation
 
-- GRPO: `model.load_in_4bit=true`, `training.use_vllm=false`, `sleep_level=0`, model/optimizer offload False. Native ms-swift `PtEngine.from_model_template` dùng chính model training để sinh, không load Qwen thứ hai. Các tham số `vllm_*` trong YAML không có hiệu lực khi tắt vLLM.
+- GRPO: `model.load_in_4bit=true`, `training.use_vllm=false`, `training.vllm_mode=null`, `sleep_level=0`, model/optimizer offload False. Native ms-swift `PtEngine.from_model_template` dùng chính model training để sinh, không load Qwen thứ hai. ms-swift yêu cầu mode phải là None khi tắt vLLM; launcher chuẩn hóa giá trị này sau overrides. Các tham số dung lượng/cache vLLM không được dùng trên nhánh Transformers.
 - Vẫn có một encoder mmBERT FP16 riêng để tính reward. mmBERT được preload và cache; việc tắt vLLM không bỏ scorer. QLoRA giảm bộ nhớ trọng số base, không giảm mọi activation/KV cache xuống 4-bit.
 - SFT giữ BF16 LoRA và native Transformers generation monitor. Chỉ generation monitor mới cần load scorer.
 - Final validation GRPO dùng Transformers 4-bit; CLI evaluator cũng tự chọn Transformers khi run đã lưu `load_in_4bit=true`. Model được giải phóng trước khi subprocess scorer chính thức chạy.

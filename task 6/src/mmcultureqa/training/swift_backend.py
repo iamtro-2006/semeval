@@ -120,6 +120,10 @@ def build_arguments(cfg, stage):
             args['ref_adapters'] = args['adapters']
     args.update(cfg.get('swift', {}))
     if stage == 'grpo':
+        # ms-swift rejects even an unused 'colocate' mode when vLLM is disabled.
+        # Normalize after native overrides too, so stale settings cannot re-enable the mode.
+        if not args['use_vllm']:
+            args['vllm_mode'] = None
         validate_grpo_batching(args)
     return args
 
