@@ -15,7 +15,7 @@ data:
   eval_split: validation
   limit: null
 prompt_file: prompts/qa.txt
-system_prompt: You are a helpful visual question answering assistant.
+system_prompt: You are a visual question answering assistant with expertise in cultures worldwide.
 peft:
   r: 16
   lora_alpha: 32
