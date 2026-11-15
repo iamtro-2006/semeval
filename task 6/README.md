@@ -30,8 +30,8 @@ MMCQA/                           ← ROOT_FOLDER_ID
 
 1. `01_hf_to_drive_rclone.ipynb`: tải từ Hugging Face trên Colab, upload nhãn/ZIP vào `task6-data/raw` bên dưới root.
 2. `02_sft_colab.ipynb`: train SFT, upload adapter `final` và báo cáo cần thiết, sau đó **inference toàn bộ validation và chấm scorer chính thức**, lưu `validation/scores.json` và predictions lên Drive.
-3. `03_grpo_colab.ipynb`: chỉ train GRPO tiếp từ SFT; chọn `SFT_RUN_NAME`, `INPUT_SFT_STAGE`, `SFT_CHECKPOINT`. Cuối cùng **inference toàn bộ validation và chấm scorer chính thức**, lưu kết quả riêng bên trong run GRPO.
-4. `04_inference_colab.ipynb`: chỉ inference test (`devtest` mặc định), tự upload predictions. Nếu không có nhãn công khai thì chỉ xuất file nộp, không tính điểm local. Không dùng notebook này để chấm validation.
+3. `03_grpo_colab.ipynb`: chỉ train GRPO tiếp từ SFT, base NF4 4-bit và Transformers generation, không tạo model vLLM thứ hai. Mặc định đọc `SFT_RUN_NAME='experiment01'`, ghi run mới `RUN_NAME='experiment01_qlora'`; chọn `INPUT_SFT_STAGE`, `SFT_CHECKPOINT` khi cần. Cuối cùng **inference toàn bộ validation và chấm scorer chính thức**, lưu kết quả riêng bên trong run GRPO.
+4. `04_inference_colab.ipynb`: chỉ inference test (`devtest` mặc định), tự upload predictions. `INPUT_RUN_NAME` chọn SFT, `GRPO_INPUT_RUN_NAME` chọn run QLoRA mới. `ADAPTER_4BIT` chọn lượng tử hóa từng adapter (mặc định SFT False, GRPO True). Nếu không có nhãn công khai thì chỉ xuất file nộp, không tính điểm local. Không dùng notebook này để chấm validation.
 
 Mỗi notebook clone repo `iamtro-2006/semeval` và cài package trong `task 6/`. Không ZIP/upload code. Dùng cùng `ROOT_FOLDER_ID` trong các phiên để đồng bộ. File rclone gốc không bị sửa; dùng bản sao tạm để refresh token. Nếu config nằm trên Drive thì chạy cell mount tùy chọn chỉ để đọc config.
 
@@ -142,14 +142,16 @@ Chạy từ thư mục `task 6` với Python 3.11 hoặc 3.12. Cần GPU CUDA ch
 
 ```bash
 pip install -r requirements.txt
+# Chỉ thêm nếu dùng BF16 standalone inference/vLLM:
+pip install -r requirements-vllm.txt
 pip install --no-deps -e .
 python -m mmcultureqa.data.prepare download
 python -m mmcultureqa.data.prepare prepare
 python -m mmcultureqa.training.sft --config configs/sft.yaml
 python -m mmcultureqa.training.grpo --config configs/grpo.yaml
 python -m mmcultureqa.inference.predict --config configs/inference.yaml
-python -m mmcultureqa.inference.predict --config configs/inference.yaml --set model.adapter=outputs/grpo/final --set inference.output=outputs/predictions/grpo_dev.jsonl
-python -m mmcultureqa.inference.predict --config configs/inference.yaml --set model.adapter=outputs/grpo/final --set inference.split=devtest --set inference.output=outputs/predictions/grpo_devtest.jsonl
+python -m mmcultureqa.inference.predict --config configs/inference.yaml --set model.adapter=outputs/grpo/final --set model.load_in_4bit=true --set inference.backend=transformers --set inference.output=outputs/predictions/grpo_dev.jsonl
+python -m mmcultureqa.inference.predict --config configs/inference.yaml --set model.adapter=outputs/grpo/final --set model.load_in_4bit=true --set inference.backend=transformers --set inference.split=devtest --set inference.output=outputs/predictions/grpo_devtest.jsonl
 ```
 
 Ví dụ chỉnh tham số, prompt và resume:
@@ -160,7 +162,11 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set model.load_
 python -m mmcultureqa.training.sft --config configs/sft.yaml --set resume_from_checkpoint=outputs/sft/checkpoint-100
 ```
 
-Mặc định cả YAML và notebook dùng **BF16, không 4-bit** (`USE_4BIT=False`). GPU phải hỗ trợ BF16; không tự fallback sang FP16/4-bit khi thiếu bộ nhớ. mmBERT reward/monitor chạy CUDA FP16, batch 4. Số generation, batch và gradient accumulation phải phù hợp quy tắc chia nhóm của GRPO; default 1 GPU: batch 1 × accumulation 4, group 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
+SFT giữ mặc định **BF16 LoRA** (`USE_4BIT=False`). GRPO mặc định **QLoRA: base NF4 4-bit, double quantization, BF16 compute** (`USE_4BIT=True`); chỉ cập nhật adapter. GPU vẫn phải hỗ trợ BF16. mmBERT reward/monitor chạy CUDA FP16, batch 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
+
+GRPO một GPU: train microbatch **4**, gradient accumulation **4**, `steps_per_generation=4`, rollout **16 completions = 4 câu hỏi × 4 đáp án**, eval batch **8**. Dữ liệu 9.000 câu/một epoch tương ứng khoảng **2.250 optimizer step** thay vì 9.000; mỗi step xử lý nhiều dữ liệu hơn nên số step giảm không đồng nghĩa thời gian giảm đúng 4 lần. Giữ nguyên learning rate 5e-6, số đáp án 4, reward, prompt và giới hạn generation 256 token. Batching được kiểm tra trước khi cấp phát model để tránh lỗi eval batch không chia hết cho số generation.
+
+Nếu OOM, thử `GRPO_OVERRIDES = {'training.per_device_train_batch_size': 2, 'training.per_device_eval_batch_size': 4}`. Với `steps_per_generation=4`, rollout còn 8 completions; muốn giảm tiếp dùng train batch 1. Giữ eval batch chia hết cho 4 trên một GPU. Dùng run mới khi đổi recipe; không resume optimizer từ checkpoint BF16/vLLM cũ vào QLoRA mới. Adapter SFT BF16 vẫn được nạp qua cơ chế PEFT để train tiếp.
 
 ## Monitoring theo ms-swift
 
@@ -189,16 +195,15 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.pr
 
 `monitor.limit=null` dùng toàn bộ val, độc lập `data.limit` của train. `monitor.max_new_tokens` và `monitor.device` chỉnh generation metric SFT; reward GRPO chỉnh trong `reward`. Trong smoke notebook vẫn tắt evaluation SFT định kỳ (một step), nhưng đánh giá cuối giữ nguyên. Bước đánh giá cuối của cả hai stage luôn sinh đáp án và chấm scorer chính thức, không phụ thuộc flag monitor.
 
-## BF16 + GPU mmBERT + vLLM mặc định
+## QLoRA GRPO và backend generation
 
-- SFT/GRPO: Qwen3-VL-4B BF16 + LoRA, không lượng tử hóa nền. GPU không hỗ trợ BF16 sẽ báo lỗi rõ ràng.
-- mmBERT dùng CUDA FP16; scorer được preload trước khi vLLM profile bộ nhớ và cache để dùng lại. SFT không generation không load mmBERT không dùng đến; bật generation mới load scorer.
-- GRPO: `use_vllm=true`, colocate, LoRA weight sync, `sleep_level=1`, prefix caching, tối đa 4 sequence, context 2048. vLLM chiếm ngân sách 0.45 tổng VRAM; model/optimizer training không offload mặc định.
-- vLLM có bản model phục vụ rollout riêng. Trên L4 24 GB, BF16 training + vLLM + mmBERT có thể chạm giới hạn VRAM dù chỉ load Qwen + mmBERT thì đủ. Sleep giải phóng vLLM giữa rollout và bước train. Đây là cấu hình khởi đầu chưa benchmark, không bảo đảm nhanh nhất hay luôn đủ 24 GB. Không tự giảm chất lượng để né OOM.
-- `training.vllm_max_model_len=2048` là giới hạn context phục vụ rollout, không phải lệnh cắt prompt. Prompt + ảnh + đáp án phải vừa giới hạn; nếu tăng prompt/ảnh, điều chỉnh cấu hình và đo VRAM. Các mẫu QA hiện có mặc định ngắn hơn nhiều mức này.
-- Nếu cần thêm bộ nhớ, bật `training.offload_model=true` theo cơ chế ms-swift, đổi VRAM lấy thời gian chuyển CPU/GPU; hoặc dùng GPU lớn hơn. Muốn tắt vLLM đặt `training.use_vllm=false`.
-- Final/test inference: vLLM standalone, batch 8, tối đa 8 sequence, context 2048, memory utilization 0.8. Model được giải phóng trước khi subprocess scorer chính thức chạy, không giữ thêm optimizer để chấm cuối.
-- Pin `vllm==0.11.0`, khớp torch/torchaudio 2.8.0 và torchvision 0.23.0. Dùng Colab Linux x86_64; restart runtime nếu cài lại bộ torch/vLLM yêu cầu. Không cài vLLM mới nhất đè lên bộ pin.
+- GRPO: `model.load_in_4bit=true`, `training.use_vllm=false`, `sleep_level=0`, model/optimizer offload False. Native ms-swift `PtEngine.from_model_template` dùng chính model training để sinh, không load Qwen thứ hai. Các tham số `vllm_*` trong YAML không có hiệu lực khi tắt vLLM.
+- Vẫn có một encoder mmBERT FP16 riêng để tính reward. mmBERT được preload và cache; việc tắt vLLM không bỏ scorer. QLoRA giảm bộ nhớ trọng số base, không giảm mọi activation/KV cache xuống 4-bit.
+- SFT giữ BF16 LoRA và native Transformers generation monitor. Chỉ generation monitor mới cần load scorer.
+- Final validation GRPO dùng Transformers 4-bit; CLI evaluator cũng tự chọn Transformers khi run đã lưu `load_in_4bit=true`. Model được giải phóng trước khi subprocess scorer chính thức chạy.
+- Standalone inference cho phép SFT BF16/vLLM và GRPO 4-bit/Transformers trong hai subprocess riêng. Model được giải phóng giữa các stage.
+- `requirements.txt` không yêu cầu vLLM. Notebook GRPO dùng `INSTALL_VLLM=False`, kiểm tra import PtEngine/bitsandbytes mà không bắt buộc vLLM. SFT/inference dùng `requirements-vllm.txt` khi cần backend BF16/vLLM (`vllm==0.11.0`, torch 2.8.0). Package vLLM đã cài từ phiên cũ có thể còn đó nhưng GRPO không khởi tạo engine của nó.
+- Đây là cấu hình chưa benchmark trên GPU. Không bảo đảm dưới 8 tiếng hoặc batch 4 luôn vừa VRAM. Đo thời gian sau warmup và peak VRAM; lượng tử hóa có thể thêm chi phí giải lượng tử dù tiết kiệm được offload và một bản model.
 
 Các knobs trong YAML vẫn chỉnh được. Khi chọn 4-bit ở notebook, standalone inference/final validation dùng backend Transformers; recipe vLLM hiện tại chỉ hỗ trợ BF16.
 
@@ -211,7 +216,7 @@ Các knobs trong YAML vẫn chỉnh được. Khi chọn 4-bit ở notebook, sta
 - Plugin mmBERT pin model/revision/layer, IDF off, no rescaling, fast tokenizer và giới hạn 512. Empty answer nhận 0. Scorer cache theo cấu hình để tránh tải lại mỗi batch. Giữ nguyên scorer cuối chính thức trong vendor.
 - native arguments được lưu trong swift_arguments.json. Khóa `swift` trong YAML cho phép override trực tiếp các tham số TrainArguments/RLHFArguments; framework sẽ báo lỗi nếu tên tham số không hợp lệ. Cấu hình native override có quyền ưu tiên, vì vậy chỉ đổi khi hiểu tác động.
 - Adapter/checkpoint được ms-swift lưu; hook project chỉ chuẩn hóa base-model identifier trong metadata và đồng bộ Drive sau khi train thành công qua notebook launcher. Adapter `final` không chứa base weights. Checkpoint có optimizer/scheduler dùng để resume cùng stage.
-- Final validation và standalone test inference mặc định dùng VllmEngine của ms-swift, cùng pinned base revision và LoRA. Backend Transformers vẫn chọn được qua inference.backend. SFT generation monitor trong lúc train vẫn dùng Transformers theo cơ chế native ms-swift; vLLM tăng tốc rollout GRPO và inference ngoài train.
+- GRPO rollout và final validation dùng Transformers với QLoRA, cùng pinned base revision và adapter. Standalone BF16 inference vẫn có thể dùng VllmEngine; backend chọn qua inference.backend. SFT generation monitor dùng Transformers theo cơ chế native ms-swift.
 
 ## Dùng adapter SFT đã công bố
 
@@ -231,7 +236,7 @@ Scorer xếp hạng bằng mmBERT BERTScore-F1; các file trong vendor giữ ngu
 
 ## Trạng thái xác minh
 
-Môi trường training pin `numpy==2.2.6` để hỗ trợ Python 3.13 và tránh xung đột với JAX trên Colab. Không tắt backend TensorFlow/JAX. Sau cài đặt, notebook kiểm tra import Transformers, PEFT, ms-swift, qwen-vl-utils, decord và vLLM trước khi tải dữ liệu/train; lỗi sẽ in đầy đủ traceback. Sau khi đổi NumPy trên runtime cũ, restart session rồi chạy lại setup để tránh giữ binary đã import từ phiên bản cũ.
+Môi trường training pin `numpy==2.2.6` để hỗ trợ Python 3.13 và tránh xung đột với JAX trên Colab. Không tắt backend TensorFlow/JAX. Sau cài đặt, notebook kiểm tra import Transformers, PEFT, ms-swift/PtEngine, bitsandbytes, qwen-vl-utils và decord trước khi tải dữ liệu/train; chỉ kiểm tra vLLM khi `INSTALL_VLLM=True`. Lỗi sẽ in đầy đủ traceback. Sau khi đổi dependency nhị phân trên runtime cũ, restart session rồi chạy lại setup.
 
 Giữ `decord==0.6.0` vì registry Qwen3-VL của ms-swift 3.11.3 khai báo dependency này; cảnh báo platform của wheel cần đối chiếu với kết quả import thực tế, không mặc định quy lỗi cho Python 3.13. Môi trường Colab có thể còn xung đột các package ngoài pipeline trong `pip check`; chưa có xác minh toàn bộ môi trường Colab/Python 3.13. Bộ requirements scorer organizer trong `vendor/` giữ nguyên và dùng môi trường riêng khi cần tái lập đúng dependency leaderboard.
 
@@ -242,7 +247,7 @@ Tham khảo API theo phiên bản được pin: `docs/SOURCES.md`.
 
 ### Precision của mmBERT
 
-Mặc định `monitor.dtype=float16` và `reward.dtype=float16` trên CUDA. Model được cast FP16 một lần và cache; đổi dtype tạo cache riêng. Mô hình Qwen fine-tune vẫn BF16. FP16 giảm bộ nhớ trọng số mmBERT và có thể tăng tốc; chưa benchmark tốc độ hoặc độ lệch điểm trên GPU.
+Mặc định `monitor.dtype=float16` và `reward.dtype=float16` trên CUDA. Scorer được cast FP16 một lần và cache; đổi dtype tạo cache riêng. Qwen SFT dùng BF16; Qwen GRPO lưu base NF4 với compute BF16. FP16 giảm bộ nhớ trọng số mmBERT và có thể tăng tốc; chưa benchmark tốc độ hoặc độ lệch điểm trên GPU.
 
 Chấm cuối cũng dùng FP16 qua wrapper `python -m mmcultureqa.score`, giữ nguyên file organizer trong vendor. JSON điểm ghi `execution_precision`. Điểm accelerated FP16 có thể lệch nhẹ với FP32; muốn đối chiếu dùng `--dtype float32` hoặc chạy trực tiếp scorer organizer.
 

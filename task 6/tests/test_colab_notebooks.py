@@ -35,6 +35,7 @@ class ColabNotebookTests(unittest.TestCase):
         self.project.mkdir(parents=True)
         shutil.copytree(PROJECT / 'src', self.project / 'src', ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copytree(PROJECT / 'configs', self.project / 'configs')
+        shutil.copytree(PROJECT / 'prompts', self.project / 'prompts')
         self.old_cwd = Path.cwd()
         self.old_path = list(sys.path)
         self.old_modules = {k: v for k, v in sys.modules.items() if k == 'mmcultureqa' or k.startswith('mmcultureqa.')}
@@ -105,7 +106,7 @@ print(ROOT)
             self.assertEqual(result.returncode, 0)
         self.assertEqual(children[-1][1]['cwd'], self.project)
 
-    def experiment(self):
+    def experiment(self, notebook='02_sft_colab'):
         commands, copies = [], []
         self.copy_options = []
         sys.path.insert(0, str(self.project / 'src'))
@@ -137,7 +138,7 @@ print(ROOT)
         import re
         ns = dict(PROJECT_ROOT=self.project, Path=Path, re=re, sys=sys, stream_run=stream_run,
                   copy=copy, cloud=lambda p: f'remote:{p}')
-        exec(find_cell('02_sft_colab', 'USE_4BIT ='), ns)
+        exec(find_cell(notebook, 'USE_4BIT ='), ns)
         os.chdir(self.content)
         return ns, commands, copies
 
@@ -162,6 +163,11 @@ print(ROOT)
         self.assertEqual(len(uploads), 2)
         self.assertTrue(all(source == str(predictions) for source, dest in uploads))
         self.assertEqual([c[2] for c in commands], ['mmcultureqa.inference.predict'] * 2)
+        self.assertIn('inference.backend="vllm"', commands[0])
+        self.assertIn('model.load_in_4bit=false', commands[0])
+        self.assertIn('inference.backend="transformers"', commands[1])
+        self.assertIn('model.load_in_4bit=true', commands[1])
+        self.assertIn('remote:task6-runs/experiment01_qlora/grpo/final', copies[2])
         from mmcultureqa.storage import upload_filters
         self.assertEqual(self.copy_options[1], tuple(upload_filters('predictions')))
         self.assertEqual(self.copy_options[3], tuple(upload_filters('predictions')))
@@ -236,6 +242,106 @@ print(ROOT)
         with self.assertRaisesRegex(FileNotFoundError, 'weights missing'):
             ns['require_adapter'](folder)
         self.assertFalse(commands)
+
+    def test_grpo_notebook_quantizes_and_uses_separate_output_run(self):
+        ns, commands, copies = self.experiment('03_grpo_colab')
+        self.assertTrue(ns['USE_4BIT'])
+        self.assertEqual(ns['RUN_NAME'], 'experiment01_qlora')
+        exec(find_cell('03_grpo_colab', 'SFT_RUN_NAME ='), ns)
+        self.assertEqual(ns['SFT_RUN_NAME'], 'experiment01')
+        self.assertIn('remote:task6-runs/experiment01/sft/final', copies[0])
+        command = commands[0]
+        self.assertIn('model.load_in_4bit=true', command)
+        validation = []
+        ns['stream_run'] = lambda cmd, check=True: validation.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+        exec(find_cell('03_grpo_colab', 'VAL_LIMIT ='), ns)
+        self.assertEqual(validation[0][-2:], ['--backend', 'transformers'])
+        install = find_cell('03_grpo_colab', 'INSTALL_VLLM =')
+        self.assertIn('INSTALL_VLLM = False', install)
+
+    def grpo_config(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.common import config, write_jsonl
+        with patch.object(sys, 'argv', ['test', '--config', str(self.project / 'configs/grpo.yaml')]):
+            cfg = config()
+        manifest = self.project / 'data/prepared'
+        write_jsonl(manifest / 'train.jsonl', [dict(id='train-1', image='train.jpg', question='Train?', answer='train-gold')])
+        write_jsonl(manifest / 'validation.jsonl', [dict(id='val-1', image='val.jpg', question='Val?', answer='val-gold')])
+        adapter = self.project / 'outputs/sft/final'
+        adapter.mkdir(parents=True)
+        (adapter / 'adapter_config.json').write_text('{"r": 16}', encoding='utf-8')
+        return cfg
+
+    def test_native_grpo_arguments_use_qlora_and_batched_transformers(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.training.swift_backend import build_arguments
+        with patch.dict(os.environ, WORLD_SIZE='1'):
+            args = build_arguments(cfg, 'grpo')
+        self.assertEqual(args['quant_method'], 'bnb')
+        self.assertEqual(args['quant_bits'], 4)
+        self.assertEqual(args['bnb_4bit_quant_type'], 'nf4')
+        self.assertTrue(args['bnb_4bit_use_double_quant'])
+        self.assertEqual(args['bnb_4bit_compute_dtype'], 'bfloat16')
+        self.assertEqual(args['train_type'], 'lora')
+        self.assertFalse(args['use_vllm'])
+        self.assertFalse(args['offload_model'])
+        self.assertFalse(args['offload_optimizer'])
+        self.assertEqual(args['sleep_level'], 0)
+        self.assertEqual(args['per_device_train_batch_size'], 4)
+        self.assertEqual(args['per_device_eval_batch_size'], 8)
+        self.assertEqual(args['per_device_train_batch_size'] * args['steps_per_generation'], 16)
+        self.assertEqual(args['num_generations'], 4)
+        self.assertEqual(args['reward_funcs'], ['mmcqa_bertscore'])
+        self.assertEqual(args['beta'], 0)
+        self.assertNotIn('ref_adapters', args)
+        self.assertTrue(args['load_best_model_at_end'])
+        records = [json.loads(line) for line in Path(args['dataset'][0]).read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(records[0]['solution'], 'train-gold')
+        self.assertNotIn('train-gold', json.dumps(records[0]['messages']))
+
+    def test_grpo_checks_eval_grouping_after_overrides(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.training.swift_backend import build_arguments, validate_grpo_batching
+        with patch.dict(os.environ, WORLD_SIZE='1'):
+            args = build_arguments(cfg, 'grpo')
+            for batch in (1, 2, 4):
+                validate_grpo_batching({**args, 'per_device_train_batch_size': batch})
+            with self.assertRaisesRegex(ValueError, 'eval batch'):
+                validate_grpo_batching({**args, 'per_device_eval_batch_size': 1})
+            with self.assertRaisesRegex(ValueError, 'generation_batch_size'):
+                validate_grpo_batching({**args, 'generation_batch_size': 15})
+            with self.assertRaisesRegex(ValueError, 'positive'):
+                validate_grpo_batching({**args, 'generation_batch_size': 0})
+            cfg['swift'] = {'per_device_eval_batch_size': 1}
+            with self.assertRaisesRegex(ValueError, 'eval batch'):
+                build_arguments(cfg, 'grpo')
+
+    def test_quantized_evaluator_automatically_selects_transformers(self):
+        cfg = self.grpo_config()
+        from mmcultureqa import evaluate
+        run = self.project / 'outputs/qlora-test'
+        (run / 'final').mkdir(parents=True)
+        (run / 'final/adapter_config.json').write_text('{}', encoding='utf-8')
+        cfg['prompt_text'] = (self.project / cfg['prompt_file']).read_text(encoding='utf-8')
+        (run / 'run.json').write_text(json.dumps(cfg), encoding='utf-8')
+        inferred = []
+
+        def child(command, **kwargs):
+            if command[2] == 'mmcultureqa.inference.predict':
+                config_file = Path(command[command.index('--config') + 1])
+                frozen = json.loads(config_file.read_text(encoding='utf-8'))
+                inferred.append(frozen)
+                Path(frozen['inference']['output']).write_text(
+                    '{"id": "val-1", "answer": "fixture"}\n', encoding='utf-8')
+            else:
+                Path(command[command.index('--out') + 1]).write_text('{}', encoding='utf-8')
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(sys, 'argv', ['evaluate', '--run-dir', str(run)]), patch('subprocess.run', side_effect=child):
+            evaluate.main()
+        self.assertTrue(inferred[0]['model']['load_in_4bit'])
+        self.assertEqual(inferred[0]['inference']['backend'], 'transformers')
+        self.assertIsNone(inferred[0]['data']['limit'])
 
 
 if __name__ == '__main__':

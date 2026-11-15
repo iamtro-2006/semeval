@@ -161,22 +161,26 @@ stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=
 
 gpu_setup = setup + [md('''## Install GPU environment
 Restart the runtime if requested, then rerun clone/setup. GPU training has not been run on the CPU-only development machine.
-'''), code('''stream_run([sys.executable, '-m', 'pip', 'install', '-r', str(PROJECT_ROOT / 'requirements.txt')])
+'''), code('''INSTALL_VLLM = True  # optional backend for BF16 final/test inference; False for GRPO QLoRA
+requirements = 'requirements-vllm.txt' if INSTALL_VLLM else 'requirements.txt'
+stream_run([sys.executable, '-m', 'pip', 'install', '-r', str(PROJECT_ROOT / requirements)])
 # Colab may have unrelated preinstalled-package conflicts; print the full report.
 stream_run([sys.executable, '-m', 'pip', 'check'], check=False)
 stream_run(['nvidia-smi'])
 '''), code('''# Fail early on dependency/import errors before downloading data or starting training.
 import subprocess, sys
 stream_run([sys.executable, '-c', """
+import sys
 from importlib.metadata import version
-for name in ('numpy', 'torch', 'transformers', 'peft', 'trl', 'ms-swift', 'vllm'):
+for name in ('numpy', 'torch', 'transformers', 'peft', 'trl', 'ms-swift', 'bitsandbytes'):
     print(name, version(name), flush=True)
 from transformers.modeling_utils import PreTrainedModel
 from peft import PeftModel
 from swift.llm import TrainArguments, RLHFArguments
 import qwen_vl_utils
 import decord
-from vllm import LLM
+from bitsandbytes.nn import Linear4bit
+from swift.llm import PtEngine
 import mmcultureqa.common
 import mmcultureqa.data.prepare
 import mmcultureqa.training.sft
@@ -186,20 +190,27 @@ import mmcultureqa.inference.predict
 import mmcultureqa.evaluate
 from swift.llm.train.sft import SwiftSft
 from swift.llm.train.rlhf import SwiftRLHF
-from swift.llm import VllmEngine, InferRequest, RequestConfig
+from swift.llm import InferRequest, RequestConfig
+if sys.argv[1] == '1':
+    print('vllm', version('vllm'), flush=True)
+    from vllm import LLM
+    from swift.llm import VllmEngine
 from swift.plugin import metric_mapping, orms, ORM
 from swift.utils import Serializer
 print('Training imports OK', flush=True)
-"""])
+""", '1' if INSTALL_VLLM else '0'])
 ''')] + storage + data_setup + [md('''## Experiment settings
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
 Intermediate checkpoints stay on local SSD; only the selected final adapter uploads after successful training.
 Uploads use explicit allowlists: adapter/processor, run settings, learning reports and validation results.
 Optimizer states, exported training data, caches and temporary evaluation files stay local.
 Local SSD is used for training and inference. If the runtime is lost before the final upload, local checkpoints cannot be recovered from Drive.
-Default: native BF16 LoRA, CUDA FP16 mmBERT; GRPO uses vLLM colocate with sleep enabled.
+SFT defaults to BF16 LoRA. GRPO defaults to NF4 QLoRA with BF16 compute and native Transformers generation.
+GRPO reuses the training Qwen model for generation, with no second vLLM Qwen and no CPU offload.
+Both stages retain CUDA FP16 mmBERT scoring.
 SFT's optional in-training generation monitor uses the native ms-swift Transformers path.
-Final validation/test inference uses vLLM. This is an unbenchmarked 24 GB starting configuration.
+Final validation uses Transformers when USE_4BIT=True, otherwise vLLM.
+These are unbenchmarked GPU starting configurations; measure throughput and peak memory on Colab.
 '''), code('''import json
 USE_4BIT = False
 PREDICT_WITH_GENERATE = False  # default SFT: val loss + token accuracy; True: generation + mmBERT
@@ -287,7 +298,26 @@ print('SFT adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}/final')
 print('Notebook 03: select the same ROOT_FOLDER_ID, SFT_RUN_NAME and INPUT_SFT_STAGE.')
 ''')]
 
-grpo_notebook = gpu_setup + [md('''## GRPO only · ms-swift + PEFT
+def grpo_profile(cells):
+    result = []
+    for cell in cells:
+        if cell['cell_type'] == 'code':
+            source = ''.join(cell['source'])
+            source = source.replace('USE_4BIT = False', 'USE_4BIT = True', 1)
+            source = source.replace('INSTALL_VLLM = True', 'INSTALL_VLLM = False', 1)
+            source = source.replace("RUN_NAME = 'experiment01'", "RUN_NAME = 'experiment01_qlora'", 1)
+            cell = code(source)
+        result.append(cell)
+    return result
+
+
+grpo_notebook = grpo_profile(gpu_setup) + [md('''## GRPO only · ms-swift + PEFT QLoRA
+Base weights: bitsandbytes NF4 + double quantization; BF16 compute, only LoRA is trained.
+USE_4BIT=True; training.use_vllm=False. Native PtEngine shares the training model.
+Single GPU default: train microbatch 4, accumulation 4, rollout 16 completions (4 questions), eval batch 8.
+Keep 4 completions/question and the same mmBERT-F1 reward. No model/optimizer offload or vLLM sleep.
+If GPU memory is insufficient, try train batch 2 and eval batch 4 in GRPO_OVERRIDES.
+Use a new RUN_NAME for this recipe; SFT_RUN_NAME separately selects the existing BF16 SFT adapter.
 Full GRPO training defaults to 1 epoch, with validation and checkpoint saving every 170 optimizer steps.
 Validation rollouts are enabled independently of the SFT flag. Increasing epochs preserves best selection.
 Select the highest validation reward checkpoint and export it as final/. Inspect
@@ -296,10 +326,10 @@ GRPO does not have the supervised token-loss/accuracy semantics of SFT.
 The explicit RUN_FULL=False smoke path disables periodic validation and best selection.
 Paths are automatically derived from MMCQA root. This notebook never trains SFT.
 A full GRPO experiment should use a full SFT checkpoint, not a smoke adapter.
-'''), code('''SFT_RUN_NAME = RUN_NAME
+'''), code('''SFT_RUN_NAME = 'experiment01'  # existing SFT run; independent of the new QLoRA output RUN_NAME
 INPUT_SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
 SFT_CHECKPOINT = 'final'  # or checkpoint-N
-GRPO_OVERRIDES = {}  # e.g. {'reward.device': 'cuda', 'training.learning_rate': 0.000005}
+GRPO_OVERRIDES = {}  # OOM alternative: {'training.per_device_train_batch_size': 2, 'training.per_device_eval_batch_size': 4}
 RESUME_CHECKPOINT = ''  # manually backed-up GRPO checkpoint-N only
 local_adapter = PROJECT_ROOT / 'outputs/inputs/sft' / SFT_RUN_NAME / INPUT_SFT_STAGE / SFT_CHECKPOINT
 copy(cloud(f'task6-runs/{SFT_RUN_NAME}/{INPUT_SFT_STAGE}/{SFT_CHECKPOINT}'), local_adapter)
@@ -364,19 +394,25 @@ inference_notebook = gpu_setup + [md('''## Test inference only
 Select run/stage names below. No manual Drive filesystem paths are needed.
 Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
-'''), code('''INPUT_RUN_NAME = RUN_NAME
+'''), code('''INPUT_RUN_NAME = RUN_NAME  # existing SFT run, e.g. experiment01
+GRPO_INPUT_RUN_NAME = f'{INPUT_RUN_NAME}_qlora'  # new notebook 03 output run
 SPLIT = 'devtest'
 TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test
 if SPLIT not in {'devtest', 'test'}:
     raise ValueError('Use devtest/test here; validation is evaluated in the training notebooks')
 ADAPTER_STAGES = {'sft': SFT_STAGE, 'grpo': GRPO_STAGE}
+ADAPTER_RUN_NAMES = {'sft': INPUT_RUN_NAME, 'grpo': GRPO_INPUT_RUN_NAME}
+ADAPTER_4BIT = {'sft': USE_4BIT, 'grpo': True}
 predictions = RUNS / 'predictions'
 for label, stage in ADAPTER_STAGES.items():
-    adapter = PROJECT_ROOT / 'outputs/inputs/inference' / INPUT_RUN_NAME / stage / 'final'
-    copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{stage}/final'), adapter)
+    input_run = ADAPTER_RUN_NAMES[label]
+    use_4bit = ADAPTER_4BIT[label]
+    adapter = PROJECT_ROOT / 'outputs/inputs/inference' / input_run / stage / 'final'
+    copy(cloud(f'task6-runs/{input_run}/{stage}/final'), adapter)
     require_adapter(adapter)
     overrides = {**common, 'model.adapter': str(adapter), 'model.adapter_revision': None,
-                 'inference.backend': 'transformers' if USE_4BIT else 'vllm',
+                 'model.load_in_4bit': use_4bit,
+                 'inference.backend': 'transformers' if use_4bit else 'vllm',
                  'inference.split': SPLIT, 'inference.output': str(predictions / f'{label}_{SPLIT}.jsonl')}
     overrides['data.limit'] = TEST_LIMIT
     run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)

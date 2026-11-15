@@ -1,0 +1,3 @@
+# Optional standalone BF16 inference backend; GRPO QLoRA does not need vLLM.
+-r requirements.txt
+vllm==0.11.0; platform_system == "Linux" and platform_machine == "x86_64"

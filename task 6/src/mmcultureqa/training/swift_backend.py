@@ -6,6 +6,27 @@ from pathlib import Path
 from ..common import messages, path, provenance, read_jsonl, rows_for, write_jsonl
 
 
+def validate_grpo_batching(args):
+    """Check the grouping constraints before ms-swift allocates GPU models."""
+    world = int(os.environ.get('WORLD_SIZE', '1'))
+    batch = args['per_device_train_batch_size']
+    accumulation = args['gradient_accumulation_steps']
+    steps = args.get('steps_per_generation')
+    if steps is None:
+        steps = accumulation
+    generations = args['num_generations']
+    rollout = args.get('generation_batch_size')
+    if rollout is None:
+        rollout = batch * world * steps
+    if min(world, batch, accumulation, steps, rollout) < 1 or generations < 2:
+        raise ValueError('GRPO requires positive batch sizes/steps and num_generations >= 2')
+    if rollout % (batch * world) or rollout % generations:
+        raise ValueError('GRPO generation_batch_size must divide into global microbatches and complete generation groups')
+    if args.get('eval_strategy') != 'no' and (args['per_device_eval_batch_size'] < 1
+                                            or args['per_device_eval_batch_size'] * world % generations):
+        raise ValueError('GRPO global eval batch size must be divisible by num_generations')
+
+
 def export_dataset(cfg, rows, destination, stage):
     records = []
     for row in rows:
@@ -60,7 +81,8 @@ def build_arguments(cfg, stage):
                 lora_dropout=cfg['peft']['lora_dropout'], lora_bias=cfg['peft']['bias'],
                 freeze_vit=True, freeze_aligner=True)
     if mc.get('load_in_4bit'):
-        args.update(quant_method='bnb', quant_bits=4, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True)
+        args.update(quant_method='bnb', quant_bits=4, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=mc.get('dtype', 'auto'))
     if mc.get('adapter'):
         adapter = path(mc['adapter'])
         if not adapter.is_dir():
@@ -82,7 +104,8 @@ def build_arguments(cfg, stage):
             raise ValueError('reward.type must be mmbert or exact')
         for key in ('num_generations', 'max_completion_length', 'temperature', 'top_p', 'beta', 'loss_type', 'use_vllm'):
             args[key] = tc[key]
-        for key in ('vllm_mode', 'vllm_enable_lora', 'vllm_gpu_memory_utilization', 'vllm_max_model_len',
+        for key in ('steps_per_generation', 'generation_batch_size',
+                    'vllm_mode', 'vllm_enable_lora', 'vllm_gpu_memory_utilization', 'vllm_max_model_len',
                     'vllm_max_num_seqs', 'vllm_enable_prefix_caching', 'vllm_limit_mm_per_prompt',
                     'sleep_level', 'offload_model', 'offload_optimizer'):
             if key in tc:
@@ -96,6 +119,8 @@ def build_arguments(cfg, stage):
         if args.get('beta', 0) > 0:
             args['ref_adapters'] = args['adapters']
     args.update(cfg.get('swift', {}))
+    if stage == 'grpo':
+        validate_grpo_batching(args)
     return args
 
 
@@ -119,6 +144,7 @@ def train(cfg, stage):
         raise RuntimeError('BF16 is required by this configuration; select a BF16-capable GPU such as L4')
     cfg['_dtype'] = cfg['model']['dtype'] = dtype
     cfg['_framework'] = 'ms-swift==3.11.3'
+    native = build_arguments(cfg, stage)
     os.environ.update(MAX_PIXELS=str(cfg['model']['max_pixels']), MIN_PIXELS=str(cfg['model']['min_pixels']))
     from swift.llm import TrainArguments, RLHFArguments
     from swift.llm.train.sft import SwiftSft
@@ -134,9 +160,6 @@ def train(cfg, stage):
         preload_scorer(cfg['reward'])
     elif stage == 'sft' and cfg['training'].get('predict_with_generate', False):
         preload_scorer(cfg['monitor'])
-    native = build_arguments(cfg, stage)
-    if cfg['model'].get('load_in_4bit'):
-        native['bnb_4bit_compute_dtype'] = dtype
     cls = SwiftSft if stage == 'sft' else SwiftRLHF
     args_cls = TrainArguments if stage == 'sft' else RLHFArguments
 

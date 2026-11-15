@@ -53,6 +53,8 @@ def main():
                         'do_sample': False, 'output': str(predictions), 'resume': True}
     if args.backend:
         cfg['inference']['backend'] = args.backend
+    elif cfg['model'].get('load_in_4bit'):
+        cfg['inference']['backend'] = 'transformers'
     # JSON is valid YAML. Reuse the exact saved training prompt and model settings.
     frozen_prompt = output / 'prompt.txt'
     frozen_prompt.write_text(cfg['prompt_text'], encoding='utf-8')
