@@ -3,6 +3,7 @@
 Run: python -m unittest discover -s "task 6/tests" -v
 """
 import ast
+from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
@@ -106,6 +107,8 @@ print(ROOT)
 
     def experiment(self):
         commands, copies = [], []
+        self.copy_options = []
+        sys.path.insert(0, str(self.project / 'src'))
 
         def adapter(folder):
             folder.mkdir(parents=True, exist_ok=True)
@@ -114,6 +117,7 @@ print(ROOT)
 
         def copy(source, destination, *args):
             copies.append((str(source), str(destination)))
+            self.copy_options.append(args)
             if str(source).startswith('remote:'):
                 adapter(Path(destination))
 
@@ -144,6 +148,8 @@ print(ROOT)
         self.assertEqual([c[2] for c in commands], ['mmcultureqa.training.sft', 'mmcultureqa.training.grpo'])
         self.assertTrue((Path(ns['GRPO']) / 'final/adapter_config.json').is_file())
         self.assertTrue(all(Path(source).is_absolute() for source, dest in copies if dest.startswith('remote:')))
+        from mmcultureqa.storage import upload_filters
+        self.assertEqual(self.copy_options[0], tuple(upload_filters('run')))
 
     def test_inference_uploads_both_predictions_without_training_final(self):
         ns, commands, copies = self.experiment()
@@ -156,6 +162,71 @@ print(ROOT)
         self.assertEqual(len(uploads), 2)
         self.assertTrue(all(source == str(predictions) for source, dest in uploads))
         self.assertEqual([c[2] for c in commands], ['mmcultureqa.inference.predict'] * 2)
+        from mmcultureqa.storage import upload_filters
+        self.assertEqual(self.copy_options[1], tuple(upload_filters('predictions')))
+        self.assertEqual(self.copy_options[3], tuple(upload_filters('predictions')))
+
+    def test_upload_allowlists_keep_only_selected_artifacts(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.storage import upload_filters
+
+        def selected(kind, filename):
+            args = upload_filters(kind)
+            for flag, rule in zip(args[::2], args[1::2]):
+                self.assertEqual(flag, '--filter')
+                decision, pattern = rule.split(' ', 1)
+                if fnmatchcase(filename, pattern.lstrip('/')):
+                    return decision == '+'
+            self.fail('Every upload allowlist must end with a deny-all rule')
+
+        keep = {
+            'run': ['final/adapter_config.json', 'final/adapter_model.safetensors',
+                    'final/adapter_model.bin', 'final/tokenizer.json', 'final/preprocessor_config.json',
+                    'final/video_preprocessor_config.json', 'final/chat_template.jinja',
+                    'run.json', 'swift_arguments.json', 'logging.jsonl', 'trainer_state.json',
+                    'learning_curves.png', 'validation/scores.json', 'validation/evaluation.json',
+                    'validation/predictions.jsonl', 'validation_subset_4/scores.json'],
+            'predictions': ['sft_devtest.jsonl', 'grpo_devtest.jsonl', 'sft_test.jsonl',
+                            'grpo_test/run.json', 'sft_test_scores.json'],
+            'data': ['REVISION', 'qa/mena/train_en.jsonl', 'qa/mena/dev_en.jsonl',
+                     'qa/mena/devtest_en.jsonl', 'archives/images_mena_train.zip',
+                     'archives/images_mena_dev.zip', 'archives/images_mena_devtest.zip'],
+        }
+        drop = {
+            'run': ['checkpoint-170/adapter_model.safetensors', 'checkpoint-170/optimizer.pt',
+                    'optimizer.pt', 'swift_data/train.jsonl', 'final/training_args.bin',
+                    'validation/gold_en.jsonl', 'validation/inference_config.json',
+                    'validation/prompt.txt', 'validation/predictions.signature',
+                    'validation/predictions/run.json', 'tensorboard/events.out.tfevents',
+                    'some_new_directory/large_file.bin'],
+            'predictions': ['devtest_gold_en.jsonl', 'sft_devtest.signature',
+                            'some_new_file.jsonl', 'some_new_directory/cache.bin'],
+            'data': ['qa/mena/train_en.parquet', 'README.md', '.cache/huggingface/download/metadata',
+                     'train/images/example.jpg', 'qa/mena/train_arz.jsonl', 'archives/audio.zip'],
+        }
+        for kind, filenames in keep.items():
+            for filename in filenames:
+                with self.subTest(kind=kind, keep=filename):
+                    self.assertTrue(selected(kind, filename))
+        for kind, filenames in drop.items():
+            for filename in filenames:
+                with self.subTest(kind=kind, drop=filename):
+                    self.assertFalse(selected(kind, filename))
+        # Where installed, verify rclone's actual directory traversal and rule order too.
+        rclone = shutil.which('rclone')
+        if rclone:
+            for kind in keep:
+                folder = self.content / f'upload-fixture-{kind}'
+                for filename in keep[kind] + drop[kind]:
+                    file = folder / filename
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text('fixture', encoding='utf-8')
+                result = subprocess.check_output(
+                    [rclone, 'lsjson', str(folder), '--recursive', '--files-only', *upload_filters(kind)],
+                    text=True, encoding='utf-8')
+                self.assertEqual({entry['Path'] for entry in json.loads(result)}, set(keep[kind]))
+        with self.assertRaises(ValueError):
+            upload_filters('unknown')
 
     def test_incomplete_adapter_fails_before_gpu_command(self):
         ns, commands, _ = self.experiment()

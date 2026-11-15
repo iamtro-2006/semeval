@@ -19,16 +19,17 @@ MMCQA/                           ← ROOT_FOLDER_ID
 ├── task6-data/raw/               nhãn và 3 ZIP ảnh
 └── task6-runs/<RUN_NAME>/
     ├── sft/                     hoặc sft-smoke
-    │   ├── checkpoint-N/
-    │   └── final/
+    │   ├── final/              adapter được chọn + tokenizer/processor
+    │   ├── run.json            cấu hình, prompt, phiên bản, hash manifest
+    │   ├── learning_curves.png và log/metadata nhỏ
+    │   └── validation/         điểm, tóm tắt và đáp án validation
     ├── grpo/                    hoặc grpo-smoke
-    │   ├── checkpoint-N/
-    │   └── final/
+    │   └── ...                 cùng cấu trúc SFT
     └── predictions/             JSONL và scores
 ```
 
 1. `01_hf_to_drive_rclone.ipynb`: tải từ Hugging Face trên Colab, upload nhãn/ZIP vào `task6-data/raw` bên dưới root.
-2. `02_sft_colab.ipynb`: train SFT, upload checkpoint/adapter, sau đó **inference toàn bộ validation và chấm scorer chính thức**, lưu `validation/scores.json` và predictions lên Drive.
+2. `02_sft_colab.ipynb`: train SFT, upload adapter `final` và báo cáo cần thiết, sau đó **inference toàn bộ validation và chấm scorer chính thức**, lưu `validation/scores.json` và predictions lên Drive.
 3. `03_grpo_colab.ipynb`: chỉ train GRPO tiếp từ SFT; chọn `SFT_RUN_NAME`, `INPUT_SFT_STAGE`, `SFT_CHECKPOINT`. Cuối cùng **inference toàn bộ validation và chấm scorer chính thức**, lưu kết quả riêng bên trong run GRPO.
 4. `04_inference_colab.ipynb`: chỉ inference test (`devtest` mặc định), tự upload predictions. Nếu không có nhãn công khai thì chỉ xuất file nộp, không tính điểm local. Không dùng notebook này để chấm validation.
 
@@ -52,9 +53,9 @@ Setup xác định `PROJECT_ROOT` từ `CHECKOUT`, thêm `src` vào `sys.path` c
 
 Inference dùng launcher riêng, kiểm tra adapter đầu vào và upload predictions sau mỗi stage thành công. Thư mục predictions không cần chứa `final/` của training. Sau khi cập nhật notebook, chạy lại từ cell setup; nếu vừa thay dependency nhị phân thì restart runtime rồi chạy lại từ đầu.
 
-`RUN_FULL=False` mặc định chạy thử một optimizer step; full run dùng tên experiment mới và `RUN_FULL=True`. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'` chỉ khi đã tự sao lưu checkpoint đầy đủ lên Drive, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
+Mặc định `RUN_FULL=True` chạy đầy đủ; đổi thành `RUN_FULL=False` để thử một optimizer step. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'` chỉ khi đã tự sao lưu checkpoint đầy đủ lên Drive, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
 
-Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT mặc định chọn checkpoint bằng val loss; bật generation thì chọn bằng val BERTScore-F1. GRPO giữ checkpoint cuối và log reward theo cơ chế ms-swift.
+Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT mặc định chọn checkpoint bằng val loss; bật generation thì chọn bằng val BERTScore-F1. GRPO full run mặc định chọn checkpoint có val reward cao nhất theo cơ chế ms-swift.
 
 Chạy lại đánh giá adapter cuối từ CLI, không train lại:
 
@@ -65,7 +66,20 @@ python -m mmcultureqa.evaluate --run-dir outputs/grpo
 
 Evaluator dùng prompt/model settings đã lưu trong `run.json`, kiểm tra manifest không đổi và train/val không trùng ID/ảnh, sinh đáp án rồi chấm scorer trong hai subprocess để giải phóng VRAM giữa VLM và mmBERT. Chỉ đọc gold để chấm; gold không đưa vào prompt.
 
-Training và ảnh dùng SSD local; checkpoint trung gian chỉ lưu local; rclone chỉ upload adapter `final` cùng metadata/log/kết quả đánh giá sau khi train thành công. Nếu Colab mất runtime trước khi upload cuối hoàn tất, checkpoint local không có trên Drive để phục hồi. `final` của SFT full run là best theo validation; GRPO giữ bản cuối như cấu hình hiện tại. Remote dùng `copy`, không xóa checkpoint cũ đã upload từ trước; save_total_limit chỉ giới hạn bản local. Upload cuối và sync validation đều loại `checkpoint-*` và `swift_data`. CLI ngoài notebook vẫn hoạt động bình thường, không sync nếu không cấu hình môi trường callback.
+Training và ảnh dùng SSD local; checkpoint trung gian chỉ lưu local. Rclone dùng danh sách cho phép trong `src/mmcultureqa/storage.py`, chỉ upload các mục sau:
+
+| Mục giữ trên Drive | Mục đích |
+|---|---|
+| `final/` trừ `training_args.bin` | Adapter được chọn và tokenizer/processor để dùng lại |
+| `run.json`, `swift_arguments.json` | Cấu hình thực tế, prompt, phiên bản và thông tin dataset |
+| `logging.jsonl`, `trainer_state.json`, `learning_curves.png` nếu có | Xem tiến trình học và lựa chọn checkpoint |
+| `validation/` hoặc `validation_subset_N/`: `scores.json`, `evaluation.json`, `predictions.jsonl` | So sánh kết quả và xem các câu trả lời sai |
+| `predictions/`: JSONL SFT/GRPO cho devtest/test, cấu hình inference và scores nếu có nhãn | File nộp bài và thông tin truy vết |
+| `task6-data/raw/`: 3 JSONL English, 3 ZIP ảnh, `REVISION` | Một bản dữ liệu dùng chung cho mọi run |
+
+Không upload checkpoint trung gian, optimizer/scheduler state, dataset đã export cho ms-swift, ảnh giải nén, cache, TensorBoard, Parquet trùng dữ liệu, gold validation/test sao chép, signature và config tạm của evaluator. File mới phát sinh ngoài danh sách cũng ở lại local. Những báo cáo nhỏ được giữ để không phải chạy lại model chỉ để xem kết quả; các lần `rclone copy` sau bỏ qua file không đổi.
+
+Nếu Colab mất runtime trước khi upload cuối hoàn tất, checkpoint local không có trên Drive để phục hồi. Full run mặc định chọn SFT best theo val loss và GRPO best theo val reward; chế độ smoke không chọn best theo validation. Remote dùng `copy`, không xóa file cũ đã có trên Drive; `save_total_limit` chỉ giới hạn checkpoint local. CLI ngoài notebook không tự upload.
 
 Sửa notebook generator rồi sinh lại:
 

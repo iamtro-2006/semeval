@@ -194,6 +194,8 @@ print('Training imports OK', flush=True)
 ''')] + storage + data_setup + [md('''## Experiment settings
 Only ROOT_FOLDER_ID determines cloud storage. RUN_NAME groups your experiments under it.
 Intermediate checkpoints stay on local SSD; only the selected final adapter uploads after successful training.
+Uploads use explicit allowlists: adapter/processor, run settings, learning reports and validation results.
+Optimizer states, exported training data, caches and temporary evaluation files stay local.
 Local SSD is used for training and inference. If the runtime is lost before the final upload, local checkpoints cannot be recovered from Drive.
 Default: native BF16 LoRA, CUDA FP16 mmBERT; GRPO uses vLLM colocate with sleep enabled.
 SFT's optional in-training generation monitor uses the native ms-swift Transformers path.
@@ -215,10 +217,12 @@ common = {'model.dtype': 'bfloat16', 'model.load_in_4bit': USE_4BIT,
           'training.predict_with_generate': PREDICT_WITH_GENERATE}
 
 def upload_run(local_output, cloud_subdir):
-    # Never upload intermediate checkpoints, including during final validation sync.
-    copy(local_output, cloud(cloud_subdir),
-         '--exclude', '/checkpoint-*', '--exclude', '/checkpoint-*/**',
-         '--exclude', '/swift_data/**')
+    from mmcultureqa.storage import upload_filters
+    copy(local_output, cloud(cloud_subdir), *upload_filters('run'))
+
+def upload_predictions(local_output, cloud_subdir):
+    from mmcultureqa.storage import upload_filters
+    copy(local_output, cloud(cloud_subdir), *upload_filters('predictions'))
 
 def run_command(module, config, overrides):
     config = Path(config)
@@ -245,12 +249,14 @@ def run(module, config, overrides, local_output, cloud_subdir):
 ''')]
 
 transfer = setup + storage + [md('''## Download English QA and upload automatically below MMCQA
-Includes train/dev/devtest JSONL, Parquet and image ZIPs; excludes audio and other languages.
-Only compressed archives and labels are uploaded. All later notebooks use the same relative data path.
+One shared data backup: train/dev/devtest English JSONL, image ZIPs and pinned REVISION.
+Parquet duplicates, extracted images and download caches stay local.
+All later notebooks use the same relative data path; no dataset copy per experiment.
 '''), code('''stream_run([sys.executable, '-m', 'pip', 'install', 'huggingface-hub==0.36.0', 'Pillow==11.3.0'])
 stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'download'])
 stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'])
-'''), code('''filters = ['--exclude', '.cache/**', '--exclude', 'train/**', '--exclude', 'dev/**', '--exclude', 'devtest/**']
+'''), code('''from mmcultureqa.storage import upload_filters
+filters = upload_filters('data')
 copy('data/raw', cloud('task6-data/raw'), *filters)
 stream_run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
                 '--one-way', '--size-only', *filters], check=True)
@@ -377,7 +383,7 @@ for label, stage in ADAPTER_STAGES.items():
     prediction_file = predictions / f'{label}_{SPLIT}.jsonl'
     if not prediction_file.is_file():
         raise FileNotFoundError(f'Inference produced no predictions: {prediction_file}')
-    copy(predictions, cloud(f'task6-runs/{RUN_NAME}/predictions'))
+    upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
 '''), code('''from mmcultureqa.common import read_jsonl, write_jsonl
 test_rows = read_jsonl(PROJECT_ROOT / 'data/prepared' / f'{SPLIT}.jsonl')
 if TEST_LIMIT is not None:
@@ -390,7 +396,7 @@ if test_rows and all(row.get('answer') for row in test_rows):
                         '--gold', str(gold), '--lang', 'en',
                         '--pred', str(predictions / f'{label}_{SPLIT}.jsonl'),
                         '--out', str(predictions / f'{label}_{SPLIT}_scores.json')], check=True)
-    copy(predictions, cloud(f'task6-runs/{RUN_NAME}/predictions'))
+    upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
 else:
     print(f'{SPLIT} has no public answers. Predictions saved for submission; no local score available.')
 ''')]
