@@ -6,6 +6,7 @@ import ast
 from fnmatch import fnmatchcase
 import json
 import os
+import random
 from pathlib import Path
 import shutil
 import subprocess
@@ -327,6 +328,37 @@ print(ROOT)
             self.assertIsNone(build_arguments(cfg, 'grpo')['vllm_mode'])
             cfg['swift'] = {'use_vllm': True, 'vllm_mode': 'colocate'}
             self.assertEqual(build_arguments(cfg, 'grpo')['vllm_mode'], 'colocate')
+
+    def test_monitor_subset_is_seed42_reproducible_and_shared_by_stages(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.common import write_jsonl
+        from mmcultureqa.training.swift_backend import build_arguments
+        rows = [dict(id=f'val-{i}', image=f'val-{i}.jpg', question=f'Question {i}?', answer=f'Answer {i}')
+                for i in range(30)]
+        manifest = self.project / 'data/prepared/validation.jsonl'
+        write_jsonl(manifest, rows)
+        cfg['monitor']['limit'] = 8
+        cfg['training']['seed'] = 123  # validation sampling stays at seed 42
+        expected = [str(self.project / r['image']) for r in random.Random(42).sample(rows, 8)]
+        before = random.getstate()
+        with patch.dict(os.environ, WORLD_SIZE='1'):
+            for stage in ('sft', 'grpo', 'grpo'):
+                args = build_arguments(cfg, stage)
+                records = [json.loads(line) for line in Path(args['val_dataset'][0]).read_text(encoding='utf-8').splitlines()]
+                self.assertEqual([r['images'][0] for r in records], expected)
+                self.assertEqual(len(set(r['images'][0] for r in records)), 8)
+        self.assertEqual(random.getstate(), before)
+        self.assertEqual(len(manifest.read_text(encoding='utf-8').splitlines()), 30)
+
+    def test_monitor_full_validation_keeps_original_order(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.training.swift_backend import build_arguments
+        with patch.dict(os.environ, WORLD_SIZE='1'):
+            for limit in (None, 1, 256):
+                cfg['monitor']['limit'] = limit
+                args = build_arguments(cfg, 'grpo')
+                records = [json.loads(line) for line in Path(args['val_dataset'][0]).read_text(encoding='utf-8').splitlines()]
+                self.assertEqual([r['id'] for r in records], ['val-1'])
 
     def test_quantized_evaluator_automatically_selects_transformers(self):
         cfg = self.grpo_config()

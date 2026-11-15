@@ -1,6 +1,7 @@
 """Configuration adapter for the native ms-swift SFT and GRPO pipelines."""
 import json
 import os
+import random
 from pathlib import Path
 
 from ..common import messages, path, provenance, read_jsonl, rows_for, write_jsonl
@@ -55,8 +56,10 @@ def build_arguments(cfg, stage):
         raise ValueError('Train/validation images overlap')
     if cfg['monitor'].get('limit') is not None and cfg['monitor']['limit'] < 1:
         raise ValueError('monitor.limit must be null or positive')
-    if cfg['monitor'].get('limit'):
-        validation = validation[:cfg['monitor']['limit']]
+    limit = cfg['monitor'].get('limit')
+    if limit is not None and limit < len(validation):
+        # A local RNG keeps the subset fixed without changing training randomness.
+        validation = random.Random(42).sample(validation, limit)
     if not train or not validation:
         raise ValueError('Train and validation must be non-empty')
     export_dataset(cfg, train, data / 'train.jsonl', stage)

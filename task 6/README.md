@@ -193,7 +193,7 @@ python -m mmcultureqa.training.sft --config configs/sft.yaml --set training.pred
 python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.predict_with_generate=true
 ```
 
-`monitor.limit=null` dùng toàn bộ val, độc lập `data.limit` của train. `monitor.max_new_tokens` và `monitor.device` chỉnh generation metric SFT; reward GRPO chỉnh trong `reward`. Trong smoke notebook vẫn tắt evaluation SFT định kỳ (một step), nhưng đánh giá cuối giữ nguyên. Bước đánh giá cuối của cả hai stage luôn sinh đáp án và chấm scorer chính thức, không phụ thuộc flag monitor.
+`monitor.limit=null` dùng toàn bộ val, độc lập `data.limit` của train. Nếu đặt giới hạn nhỏ hơn số mẫu val (ví dụ 256), SFT và GRPO lấy mẫu ngẫu nhiên không lặp bằng seed **42**, cố định cùng subset/thứ tự qua các lần eval khi manifest không đổi; không còn lấy các mẫu đầu tiên. Bộ sinh số ngẫu nhiên riêng không làm đổi trạng thái random của training. Giới hạn lớn hơn hoặc bằng số mẫu giữ đủ val theo thứ tự gốc. `monitor.max_new_tokens` và `monitor.device` chỉnh generation metric SFT; reward GRPO chỉnh trong `reward`. Trong smoke notebook vẫn tắt evaluation SFT định kỳ (một step), nhưng đánh giá cuối giữ nguyên. Bước đánh giá cuối của cả hai stage luôn sinh đáp án và chấm scorer chính thức, không phụ thuộc flag monitor.
 
 ## QLoRA GRPO và backend generation
 
