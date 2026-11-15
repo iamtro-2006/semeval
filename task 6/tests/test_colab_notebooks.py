@@ -164,8 +164,8 @@ print(ROOT)
         self.assertEqual(len(uploads), 2)
         self.assertTrue(all(source == str(predictions) for source, dest in uploads))
         self.assertEqual([c[2] for c in commands], ['mmcultureqa.inference.predict'] * 2)
-        self.assertIn('inference.backend="vllm"', commands[0])
-        self.assertIn('model.load_in_4bit=false', commands[0])
+        self.assertIn('inference.backend="transformers"', commands[0])
+        self.assertIn('model.load_in_4bit=true', commands[0])
         self.assertIn('inference.backend="transformers"', commands[1])
         self.assertIn('model.load_in_4bit=true', commands[1])
         self.assertIn('remote:task6-runs/experiment01_qlora/grpo/final', copies[2])
@@ -260,6 +260,16 @@ print(ROOT)
         install = find_cell('03_grpo_colab', 'INSTALL_VLLM =')
         self.assertIn('INSTALL_VLLM = False', install)
 
+    def test_all_gpu_notebooks_default_to_4bit_generation_without_vllm(self):
+        for notebook in ('02_sft_colab', '03_grpo_colab', '04_inference_colab'):
+            ns, _, _ = self.experiment(notebook)
+            self.assertTrue(ns['USE_4BIT'], notebook)
+            self.assertTrue(ns['PREDICT_WITH_GENERATE'], notebook)
+            install = ast.parse(find_cell(notebook, 'INSTALL_VLLM ='))
+            assignment = next(node for node in install.body if isinstance(node, ast.Assign)
+                              and any(isinstance(t, ast.Name) and t.id == 'INSTALL_VLLM' for t in node.targets))
+            self.assertIs(assignment.value.value, False)
+
     def grpo_config(self):
         sys.path.insert(0, str(self.project / 'src'))
         from mmcultureqa.common import config, write_jsonl
@@ -300,6 +310,32 @@ print(ROOT)
         records = [json.loads(line) for line in Path(args['dataset'][0]).read_text(encoding='utf-8').splitlines()]
         self.assertEqual(records[0]['solution'], 'train-gold')
         self.assertNotIn('train-gold', json.dumps(records[0]['messages']))
+
+    def test_native_sft_uses_qlora_generation_and_preserves_effective_batch(self):
+        self.grpo_config()  # create disjoint train/validation fixture manifests
+        from mmcultureqa.common import config
+        from mmcultureqa.training.swift_backend import build_arguments
+        with patch.object(sys, 'argv', ['test', '--config', str(self.project / 'configs/sft.yaml')]):
+            cfg = config()
+        self.assertIsNone(cfg['data']['limit'])
+        self.assertEqual(cfg['monitor']['limit'], 256)
+        args = build_arguments(cfg, 'sft')
+        self.assertEqual(args['quant_bits'], 4)
+        self.assertEqual(args['bnb_4bit_quant_type'], 'nf4')
+        self.assertEqual(args['bnb_4bit_compute_dtype'], 'bfloat16')
+        self.assertTrue(args['predict_with_generate'])
+        self.assertEqual(args['metric'], 'mmcqa_bertscore')
+        self.assertEqual(args['metric_for_best_model'], 'bertscore_f1')
+        self.assertTrue(args['greater_is_better'])
+        self.assertEqual(args['per_device_train_batch_size'], 8)
+        self.assertEqual(args['gradient_accumulation_steps'], 1)
+        self.assertEqual(args['per_device_train_batch_size'] * args['gradient_accumulation_steps'], 8)
+        self.assertEqual(args['per_device_eval_batch_size'], 8)
+        cfg['training']['predict_with_generate'] = False
+        teacher_forced = build_arguments(cfg, 'sft')
+        self.assertIsNone(teacher_forced['metric'])
+        self.assertEqual(teacher_forced['metric_for_best_model'], 'loss')
+        self.assertFalse(teacher_forced['greater_is_better'])
 
     def test_grpo_checks_eval_grouping_after_overrides(self):
         cfg = self.grpo_config()

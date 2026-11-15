@@ -31,7 +31,7 @@ MMCQA/                           ← ROOT_FOLDER_ID
 1. `01_hf_to_drive_rclone.ipynb`: tải từ Hugging Face trên Colab, upload nhãn/ZIP vào `task6-data/raw` bên dưới root.
 2. `02_sft_colab.ipynb`: train SFT, upload adapter `final` và báo cáo cần thiết, sau đó **inference toàn bộ validation và chấm scorer chính thức**, lưu `validation/scores.json` và predictions lên Drive.
 3. `03_grpo_colab.ipynb`: chỉ train GRPO tiếp từ SFT, base NF4 4-bit và Transformers generation, không tạo model vLLM thứ hai. Mặc định đọc `SFT_RUN_NAME='experiment01'`, ghi run mới `RUN_NAME='experiment01_qlora'`; chọn `INPUT_SFT_STAGE`, `SFT_CHECKPOINT` khi cần. Cuối cùng **inference toàn bộ validation và chấm scorer chính thức**, lưu kết quả riêng bên trong run GRPO.
-4. `04_inference_colab.ipynb`: chỉ inference test (`devtest` mặc định), tự upload predictions. `INPUT_RUN_NAME` chọn SFT, `GRPO_INPUT_RUN_NAME` chọn run QLoRA mới. `ADAPTER_4BIT` chọn lượng tử hóa từng adapter (mặc định SFT False, GRPO True). Nếu không có nhãn công khai thì chỉ xuất file nộp, không tính điểm local. Không dùng notebook này để chấm validation.
+4. `04_inference_colab.ipynb`: chỉ inference test (`devtest` mặc định), tự upload predictions. `INPUT_RUN_NAME` chọn SFT, `GRPO_INPUT_RUN_NAME` chọn run QLoRA mới. `ADAPTER_4BIT` mặc định True cho cả SFT/GRPO; cả hai dùng Transformers. Nếu không có nhãn công khai thì chỉ xuất file nộp, không tính điểm local. Không dùng notebook này để chấm validation.
 
 Mỗi notebook clone repo `iamtro-2006/semeval` và cài package trong `task 6/`. Không ZIP/upload code. Dùng cùng `ROOT_FOLDER_ID` trong các phiên để đồng bộ. File rclone gốc không bị sửa; dùng bản sao tạm để refresh token. Nếu config nằm trên Drive thì chạy cell mount tùy chọn chỉ để đọc config.
 
@@ -55,7 +55,7 @@ Inference dùng launcher riêng, kiểm tra adapter đầu vào và upload predi
 
 Mặc định `RUN_FULL=True` chạy đầy đủ; đổi thành `RUN_FULL=False` để thử một optimizer step. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'` chỉ khi đã tự sao lưu checkpoint đầy đủ lên Drive, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
 
-Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT mặc định chọn checkpoint bằng val loss; bật generation thì chọn bằng val BERTScore-F1. GRPO full run mặc định chọn checkpoint có val reward cao nhất theo cơ chế ms-swift.
+Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT mặc định generation và chọn val BERTScore-F1 cao nhất; tắt generation mới chọn val loss thấp nhất. GRPO full run chọn checkpoint có val reward cao nhất theo cơ chế ms-swift.
 
 Chạy lại đánh giá adapter cuối từ CLI, không train lại:
 
@@ -79,7 +79,7 @@ Training và ảnh dùng SSD local; checkpoint trung gian chỉ lưu local. Rclo
 
 Không upload checkpoint trung gian, optimizer/scheduler state, dataset đã export cho ms-swift, ảnh giải nén, cache, TensorBoard, Parquet trùng dữ liệu, gold validation/test sao chép, signature và config tạm của evaluator. File mới phát sinh ngoài danh sách cũng ở lại local. Những báo cáo nhỏ được giữ để không phải chạy lại model chỉ để xem kết quả; các lần `rclone copy` sau bỏ qua file không đổi.
 
-Nếu Colab mất runtime trước khi upload cuối hoàn tất, checkpoint local không có trên Drive để phục hồi. Full run mặc định chọn SFT best theo val loss và GRPO best theo val reward; chế độ smoke không chọn best theo validation. Remote dùng `copy`, không xóa file cũ đã có trên Drive; `save_total_limit` chỉ giới hạn checkpoint local. CLI ngoài notebook không tự upload.
+Nếu Colab mất runtime trước khi upload cuối hoàn tất, checkpoint local không có trên Drive để phục hồi. Full run mặc định chọn SFT best theo val BERTScore-F1 và GRPO best theo val reward; chế độ smoke không chọn best theo validation. Remote dùng `copy`, không xóa file cũ đã có trên Drive; `save_total_limit` chỉ giới hạn checkpoint local. CLI ngoài notebook không tự upload.
 
 Sửa notebook generator rồi sinh lại:
 
@@ -162,7 +162,9 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set model.load_
 python -m mmcultureqa.training.sft --config configs/sft.yaml --set resume_from_checkpoint=outputs/sft/checkpoint-100
 ```
 
-SFT giữ mặc định **BF16 LoRA** (`USE_4BIT=False`). GRPO mặc định **QLoRA: base NF4 4-bit, double quantization, BF16 compute** (`USE_4BIT=True`); chỉ cập nhật adapter. GPU vẫn phải hỗ trợ BF16. mmBERT reward/monitor chạy CUDA FP16, batch 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
+SFT và GRPO đều mặc định **QLoRA: base NF4 4-bit, double quantization, BF16 compute** (`USE_4BIT=True`); chỉ cập nhật adapter. GPU vẫn phải hỗ trợ BF16. mmBERT reward/monitor chạy CUDA FP16, batch 4. Không bảo đảm mọi Colab GPU đều đủ VRAM cho mọi cấu hình.
+
+SFT một GPU: train microbatch **8**, gradient accumulation **1**, giữ effective batch **8** như cấu hình cũ (batch 1 × accumulation 8). Eval batch **8**, bật generation và chọn best theo BERTScore-F1. Mặc định chỉ sinh trên **256 mẫu validation ngẫu nhiên seed 42** mỗi kỳ để giảm chi phí; đánh giá cuối vẫn đủ 1.000 mẫu. SFT training vẫn teacher forcing, không sinh đáp án ở mỗi training step. Nếu OOM, dùng `SFT_OVERRIDES = {'training.per_device_train_batch_size': 4, 'training.gradient_accumulation_steps': 2, 'training.per_device_eval_batch_size': 4}`. Đặt RUN_NAME mới khi chuyển từ recipe BF16/val loss cũ.
 
 GRPO một GPU: train microbatch **4**, gradient accumulation **4**, `steps_per_generation=4`, rollout **16 completions = 4 câu hỏi × 4 đáp án**, eval batch **8**. Dữ liệu 9.000 câu/một epoch tương ứng khoảng **2.250 optimizer step** thay vì 9.000; mỗi step xử lý nhiều dữ liệu hơn nên số step giảm không đồng nghĩa thời gian giảm đúng 4 lần. Giữ nguyên learning rate 5e-6, số đáp án 4, reward, prompt và giới hạn generation 256 token. Batching được kiểm tra trước khi cấp phát model để tránh lỗi eval batch không chia hết cho số generation.
 
@@ -170,26 +172,26 @@ Nếu OOM, thử `GRPO_OVERRIDES = {'training.per_device_train_batch_size': 2, '
 
 ## Monitoring theo ms-swift
 
-SFT mặc định `PREDICT_WITH_GENERATE=False`; GRPO bật validation rollout riêng. CLI dùng `training.predict_with_generate`.
+SFT mặc định `PREDICT_WITH_GENERATE=True`; GRPO bật validation rollout riêng. CLI dùng `training.predict_with_generate`. Tắt flag SFT để quay lại teacher-forced validation loss/token accuracy.
 
-Full run mặc định: SFT 3 epoch, GRPO 1 epoch; cả hai đánh giá và lưu checkpoint mỗi 170 optimizer step. SFT chọn val loss thấp nhất, GRPO chọn val reward cao nhất rồi xuất adapter đó vào `final/`. Tăng epoch vẫn giữ cơ chế chọn tốt nhất. `RUN_FULL=False` chỉ dành cho smoke một bước, không chọn checkpoint theo validation.
+Full run mặc định: SFT 3 epoch, GRPO 1 epoch; cả hai đánh giá và lưu checkpoint mỗi 170 optimizer step trên 256 mẫu ngẫu nhiên cố định seed 42. SFT chọn val BERTScore-F1 cao nhất, GRPO chọn val reward cao nhất rồi xuất adapter đó vào `final/`. Tăng epoch vẫn giữ cơ chế chọn tốt nhất. `RUN_FULL=False` chỉ dành cho smoke một bước, không chọn checkpoint theo validation.
 
 Cả hai notebook vẽ đường cong theo optimizer step trước bước đánh giá cuối: SFT train/val loss, GRPO train/val reward. Biểu đồ lưu thành `learning_curves.png` trong thư mục run và upload lên Drive. Nếu chưa tới kỳ evaluation thì chưa có điểm validation để vẽ.
 
 | Stage/chế độ | Monitor định kỳ | Chọn checkpoint |
 |---|---|---|
 | SFT, False | train loss/token_acc; val loss/token_acc mỗi eval_steps | val loss thấp nhất |
-| SFT, True | train loss/token_acc; sinh đáp án val và eval_bertscore_precision/recall/f1 | val BERTScore-F1 cao nhất |
+| SFT, True (mặc định SFT) | train loss/token_acc; sinh đáp án val và eval_bertscore_precision/recall/f1 | val BERTScore-F1 cao nhất |
 | GRPO, False | loss/reward và thống kê rollout train của ms-swift | checkpoint cuối |
 | GRPO, True (mặc định GRPO) | thêm rollout val; eval_rewards/MMCQABERTScore/mean khi reward.type=mmbert | val reward cao nhất |
 
 SFT generation evaluation thay thế lượt teacher-forcing validation của framework: không hứa có val loss đồng thời trong cùng lượt. Token accuracy không phải điểm QA tự sinh. GRPO luôn sinh rollout khi train dù flag False; không có cách hiểu token accuracy/val loss giống SFT. Điểm reward val của GRPO là trên các đáp án sampled theo cấu hình rollout, không phải phép chấm greedy cuối. Với reward exact, tên metric tương ứng là MMCQAExact, không gọi đó là BERTScore.
 
 ```bash
-# Mặc định không generation
+# Mặc định QLoRA + generation evaluation + plugin mmBERT
 python -m mmcultureqa.training.sft --config configs/sft.yaml
-# Bật native generation evaluation + plugin mmBERT
-python -m mmcultureqa.training.sft --config configs/sft.yaml --set training.predict_with_generate=true
+# Tùy chọn teacher-forced validation, chọn best theo val loss
+python -m mmcultureqa.training.sft --config configs/sft.yaml --set training.predict_with_generate=false
 python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.predict_with_generate=true
 ```
 
@@ -199,10 +201,10 @@ python -m mmcultureqa.training.grpo --config configs/grpo.yaml --set training.pr
 
 - GRPO: `model.load_in_4bit=true`, `training.use_vllm=false`, `training.vllm_mode=null`, `sleep_level=0`, model/optimizer offload False. Native ms-swift `PtEngine.from_model_template` dùng chính model training để sinh, không load Qwen thứ hai. ms-swift yêu cầu mode phải là None khi tắt vLLM; launcher chuẩn hóa giá trị này sau overrides. Các tham số dung lượng/cache vLLM không được dùng trên nhánh Transformers.
 - Vẫn có một encoder mmBERT FP16 riêng để tính reward. mmBERT được preload và cache; việc tắt vLLM không bỏ scorer. QLoRA giảm bộ nhớ trọng số base, không giảm mọi activation/KV cache xuống 4-bit.
-- SFT giữ BF16 LoRA và native Transformers generation monitor. Chỉ generation monitor mới cần load scorer.
+- SFT dùng NF4 QLoRA và native Transformers generation monitor, bật mặc định. Chỉ generation monitor mới cần load scorer.
 - Final validation GRPO dùng Transformers 4-bit; CLI evaluator cũng tự chọn Transformers khi run đã lưu `load_in_4bit=true`. Model được giải phóng trước khi subprocess scorer chính thức chạy.
-- Standalone inference cho phép SFT BF16/vLLM và GRPO 4-bit/Transformers trong hai subprocess riêng. Model được giải phóng giữa các stage.
-- `requirements.txt` không yêu cầu vLLM. Notebook GRPO dùng `INSTALL_VLLM=False`, kiểm tra import PtEngine/bitsandbytes mà không bắt buộc vLLM. SFT/inference dùng `requirements-vllm.txt` khi cần backend BF16/vLLM (`vllm==0.11.0`, torch 2.8.0). Package vLLM đã cài từ phiên cũ có thể còn đó nhưng GRPO không khởi tạo engine của nó.
+- Standalone inference mặc định SFT/GRPO đều dùng 4-bit/Transformers trong hai subprocess riêng. Model được giải phóng giữa các stage.
+- `requirements.txt` không yêu cầu vLLM. Tất cả notebook GPU mặc định `INSTALL_VLLM=False`, kiểm tra import PtEngine/bitsandbytes mà không bắt buộc vLLM. Chỉ dùng `requirements-vllm.txt` và bật `INSTALL_VLLM=True` khi chủ động chọn BF16/vLLM (`vllm==0.11.0`, torch 2.8.0). Package vLLM đã cài từ phiên cũ có thể còn đó nhưng các backend mặc định không khởi tạo engine của nó.
 - Đây là cấu hình chưa benchmark trên GPU. Không bảo đảm dưới 8 tiếng hoặc batch 4 luôn vừa VRAM. Đo thời gian sau warmup và peak VRAM; lượng tử hóa có thể thêm chi phí giải lượng tử dù tiết kiệm được offload và một bản model.
 
 Các knobs trong YAML vẫn chỉnh được. Khi chọn 4-bit ở notebook, standalone inference/final validation dùng backend Transformers; recipe vLLM hiện tại chỉ hỗ trợ BF16.
@@ -247,7 +249,7 @@ Tham khảo API theo phiên bản được pin: `docs/SOURCES.md`.
 
 ### Precision của mmBERT
 
-Mặc định `monitor.dtype=float16` và `reward.dtype=float16` trên CUDA. Scorer được cast FP16 một lần và cache; đổi dtype tạo cache riêng. Qwen SFT dùng BF16; Qwen GRPO lưu base NF4 với compute BF16. FP16 giảm bộ nhớ trọng số mmBERT và có thể tăng tốc; chưa benchmark tốc độ hoặc độ lệch điểm trên GPU.
+Mặc định `monitor.dtype=float16` và `reward.dtype=float16` trên CUDA. Scorer được cast FP16 một lần và cache; đổi dtype tạo cache riêng. Qwen SFT/GRPO đều lưu base NF4 với compute BF16. FP16 giảm bộ nhớ trọng số mmBERT và có thể tăng tốc; chưa benchmark tốc độ hoặc độ lệch điểm trên GPU.
 
 Chấm cuối cũng dùng FP16 qua wrapper `python -m mmcultureqa.score`, giữ nguyên file organizer trong vendor. JSON điểm ghi `execution_precision`. Điểm accelerated FP16 có thể lệch nhẹ với FP32; muốn đối chiếu dùng `--dtype float32` hoặc chạy trực tiếp scorer organizer.
 

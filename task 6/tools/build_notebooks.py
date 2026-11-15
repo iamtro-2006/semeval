@@ -161,7 +161,7 @@ stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=
 
 gpu_setup = setup + [md('''## Install GPU environment
 Restart the runtime if requested, then rerun clone/setup. GPU training has not been run on the CPU-only development machine.
-'''), code('''INSTALL_VLLM = True  # optional backend for BF16 final/test inference; False for GRPO QLoRA
+'''), code('''INSTALL_VLLM = False  # enable only for optional BF16/vLLM inference
 requirements = 'requirements-vllm.txt' if INSTALL_VLLM else 'requirements.txt'
 stream_run([sys.executable, '-m', 'pip', 'install', '-r', str(PROJECT_ROOT / requirements)])
 # Colab may have unrelated preinstalled-package conflicts; print the full report.
@@ -208,15 +208,15 @@ Intermediate checkpoints stay on local SSD; only the selected final adapter uplo
 Uploads use explicit allowlists: adapter/processor, run settings, learning reports and validation results.
 Optimizer states, exported training data, caches and temporary evaluation files stay local.
 Local SSD is used for training and inference. If the runtime is lost before the final upload, local checkpoints cannot be recovered from Drive.
-SFT defaults to BF16 LoRA. GRPO defaults to NF4 QLoRA with BF16 compute and native Transformers generation.
+SFT and GRPO default to NF4 QLoRA with BF16 compute and native Transformers generation.
 GRPO reuses the training Qwen model for generation, with no second vLLM Qwen and no CPU offload.
 Both stages retain CUDA FP16 mmBERT scoring.
 SFT's optional in-training generation monitor uses the native ms-swift Transformers path.
 Final validation uses Transformers when USE_4BIT=True, otherwise vLLM.
 These are unbenchmarked GPU starting configurations; measure throughput and peak memory on Colab.
 '''), code('''import json
-USE_4BIT = False
-PREDICT_WITH_GENERATE = False  # default SFT: val loss + token accuracy; True: generation + mmBERT
+USE_4BIT = True
+PREDICT_WITH_GENERATE = True  # SFT generation + mmBERT; False selects teacher-forced validation
 RUN_FULL = True  # full training from YAML; False explicitly selects a one-step smoke run
 RUN_NAME = 'experiment01'
 if not re.fullmatch(r'[A-Za-z0-9_-]+', RUN_NAME):
@@ -278,9 +278,11 @@ print('Dataset ready under MMCQA/task6-data/raw')
 ''')]
 
 sft_notebook = gpu_setup + [md('''## SFT only · ms-swift + PEFT
-Default PREDICT_WITH_GENERATE=False: monitor teacher-forced loss and token accuracy.
+Default PREDICT_WITH_GENERATE=True: generate validation answers and monitor mmBERT P/R/F1.
+NF4 base, BF16 compute; train batch 8 x accumulation 1 preserves effective batch 8 on one GPU.
+Periodic validation: eval batch 8, fixed random subset of 256 questions, seed 42.
 Full training runs 3 epochs and exports the best validation checkpoint as final/.
-True: native ms-swift generation evaluation with mmBERT P/R/F1 plugin; select best by F1.
+Select best by BERTScore-F1. False: teacher-forced validation loss/token accuracy, select by val loss.
 Generation evaluation replaces the teacher-forced validation pass; it does not report val loss simultaneously.
 Edit SFT_OVERRIDES for prompt and training parameters. For same-stage resume, set
 RESUME_CHECKPOINT to checkpoint-N only if you manually backed it up to Drive; automatic uploads contain final adapters only.
@@ -306,8 +308,6 @@ def grpo_profile(cells):
     for cell in cells:
         if cell['cell_type'] == 'code':
             source = ''.join(cell['source'])
-            source = source.replace('USE_4BIT = False', 'USE_4BIT = True', 1)
-            source = source.replace('INSTALL_VLLM = True', 'INSTALL_VLLM = False', 1)
             source = source.replace("RUN_NAME = 'experiment01'", "RUN_NAME = 'experiment01_qlora'", 1)
             cell = code(source)
         result.append(cell)
@@ -320,7 +320,7 @@ USE_4BIT=True; training.use_vllm=False. Native PtEngine shares the training mode
 Single GPU default: train microbatch 4, accumulation 4, rollout 16 completions (4 questions), eval batch 8.
 Keep 4 completions/question and the same mmBERT-F1 reward. No model/optimizer offload or vLLM sleep.
 If GPU memory is insufficient, try train batch 2 and eval batch 4 in GRPO_OVERRIDES.
-Use a new RUN_NAME for this recipe; SFT_RUN_NAME separately selects the existing BF16 SFT adapter.
+Use a new RUN_NAME for this recipe; SFT_RUN_NAME separately selects the existing SFT adapter.
 Full GRPO training defaults to 1 epoch, with validation and checkpoint saving every 170 optimizer steps.
 Validation rollouts are enabled independently of the SFT flag. Increasing epochs preserves best selection.
 Select the highest validation reward checkpoint and export it as final/. Inspect

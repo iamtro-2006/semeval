@@ -1,5 +1,11 @@
 # Local CPU validation
 
+## Unified SFT generation defaults
+
+- SFT now uses NF4 QLoRA + BF16 compute, train microbatch 8 / accumulation 1 (effective batch 8 unchanged), eval batch 8, generation evaluation enabled and best checkpoint selected by BERTScore-F1.
+- SFT and GRPO share the fixed random seed-42 monitoring subset, default 256 rows; the complete training split and final 1,000-row validation remain independent of that limit.
+- SFT, GRPO and inference notebook defaults use 4-bit / Transformers with optional vLLM installation disabled. CPU regressions check inherited SFT arguments, generation/teacher-forced metric switching, effective batch preservation and notebook/backend defaults. GPU batch-8 fitting and speed are unmeasured.
+
 ## GRPO QLoRA recipe update
 
 - GRPO defaults to bitsandbytes NF4 + double quantization with BF16 compute, PEFT LoRA, `use_vllm=false`, no model/optimizer offload, and no vLLM sleep.
