@@ -174,7 +174,7 @@ Nếu OOM, thử `GRPO_OVERRIDES = {'training.per_device_train_batch_size': 2, '
 
 SFT mặc định `PREDICT_WITH_GENERATE=True`; GRPO bật validation rollout riêng. CLI dùng `training.predict_with_generate`. Tắt flag SFT để quay lại teacher-forced validation loss/token accuracy.
 
-Full run mặc định: SFT 3 epoch, GRPO 1 epoch; cả hai đánh giá và lưu checkpoint mỗi 170 optimizer step trên 256 mẫu ngẫu nhiên cố định seed 42. SFT chọn val BERTScore-F1 cao nhất, GRPO chọn val reward cao nhất rồi xuất adapter đó vào `final/`. Tăng epoch vẫn giữ cơ chế chọn tốt nhất. `RUN_FULL=False` chỉ dành cho smoke một bước, không chọn checkpoint theo validation.
+Full run mặc định: SFT 3 epoch, đánh giá và lưu checkpoint mỗi **100 optimizer step**; GRPO 1 epoch, mỗi **170 optimizer step**. Cả hai dùng 256 mẫu ngẫu nhiên cố định seed 42 cho validation định kỳ. SFT chọn val BERTScore-F1 cao nhất, GRPO chọn val reward cao nhất rồi xuất adapter đó vào `final/`. Tăng epoch vẫn giữ cơ chế chọn tốt nhất. `RUN_FULL=False` chỉ dành cho smoke một bước, không chọn checkpoint theo validation.
 
 Cả hai notebook vẽ đường cong theo optimizer step trước bước đánh giá cuối: SFT train/val loss, GRPO train/val reward. Biểu đồ lưu thành `learning_curves.png` trong thư mục run và upload lên Drive. Nếu chưa tới kỳ evaluation thì chưa có điểm validation để vẽ.
 
