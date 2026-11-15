@@ -27,10 +27,11 @@ from pathlib import Path
 import os, subprocess, sys
 import codecs
 
-def stream_run(cmd, check=True):
+def stream_run(cmd, check=True, cwd=None):
     # Route child output through IPython stdout, rather than its hidden OS file descriptor.
     env = dict(os.environ, PYTHONUNBUFFERED='1')
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                               cwd=cwd if cwd is not None else globals().get('PROJECT_ROOT'))
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
     try:
         while True:
@@ -56,9 +57,13 @@ def stream_run(cmd, check=True):
         result.check_returncode()
     return result
 
-checkout = Path(CHECKOUT)
+checkout = Path(CHECKOUT).expanduser()
+if not checkout.is_absolute():
+    raise ValueError('CHECKOUT must be absolute, e.g. /content/semeval')
+checkout = checkout.resolve()
 if not checkout.exists():
-    stream_run(['git', 'clone', REPO_URL, str(checkout)], check=True)
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    stream_run(['git', 'clone', REPO_URL, str(checkout)], check=True, cwd=checkout.parent)
 else:
     actual = subprocess.check_output(['git', '-C', str(checkout), 'remote', 'get-url', 'origin'], text=True).strip()
     if actual != REPO_URL:
@@ -66,12 +71,30 @@ else:
     dirty = subprocess.check_output(['git', '-C', str(checkout), 'status', '--porcelain'], text=True)
     if dirty.strip():
         raise RuntimeError('Checkout has edits; preserve your changes or choose a fresh CHECKOUT before switching revision')
-stream_run(['git', '-C', str(checkout), 'fetch', 'origin', GIT_REF], check=True)
-stream_run(['git', '-C', str(checkout), 'checkout', '--detach', 'FETCH_HEAD'], check=True)
-os.chdir(checkout / PROJECT_SUBDIR)
-stream_run([sys.executable, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', '.'], check=True)
+stream_run(['git', '-C', str(checkout), 'fetch', 'origin', GIT_REF], check=True, cwd=checkout.parent)
+stream_run(['git', '-C', str(checkout), 'checkout', '--detach', 'FETCH_HEAD'], check=True, cwd=checkout.parent)
+PROJECT_ROOT = (checkout / PROJECT_SUBDIR).resolve()
+SRC = PROJECT_ROOT / 'src'
+if not (SRC / 'mmcultureqa/__init__.py').is_file():
+    raise FileNotFoundError(f'Project package not found: {SRC / "mmcultureqa"}')
+os.chdir(PROJECT_ROOT)
+# Editable installation alone does not refresh sys.path in an already running kernel.
+# Export PYTHONPATH too, so child Python processes and workers use this same checkout.
+sys.path[:] = [str(SRC)] + [p for p in sys.path if p != str(SRC)]
+python_paths = [p for p in os.environ.get('PYTHONPATH', '').split(os.pathsep) if p and p != str(SRC)]
+os.environ['PYTHONPATH'] = os.pathsep.join([str(SRC), *python_paths])
+import importlib
+importlib.invalidate_caches()
+for name in list(sys.modules):
+    if name == 'mmcultureqa' or name.startswith('mmcultureqa.'):
+        del sys.modules[name]
+stream_run([sys.executable, '-m', 'pip', 'install', '--no-deps', '--no-build-isolation', '-e', str(PROJECT_ROOT)], check=True)
+from mmcultureqa.common import ROOT as PACKAGE_ROOT
+if PACKAGE_ROOT.resolve() != PROJECT_ROOT:
+    raise ImportError(f'mmcultureqa loaded from {PACKAGE_ROOT}, expected {PROJECT_ROOT}')
+stream_run([sys.executable, '-c', 'import mmcultureqa; print("Child package:", mmcultureqa.__file__)'])
 print('Project:', Path.cwd())
-print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+print('Commit:', subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip())
 ''')]
 
 # Shared storage setup: every notebook uses the same folder ID and relative layout.
@@ -86,10 +109,13 @@ If your config is on mounted Drive, run the optional mount cell first.
 '''), code('''ROOT_FOLDER_ID = '1kcdByZiSJzGSoEtY9q0OEhsZwiTZkxpV'  # ID or URL of the MMCQA folder
 RCLONE_CONFIG_PATH = '/content/rclone.conf'
 REMOTE = 'iamtro'  # Google Drive remote in rclone.conf
-'''), code('''!sudo apt-get -qq update && sudo apt-get -qq install -y rclone
+'''), code('''stream_run(['sudo', 'apt-get', '-qq', 'update'])
+stream_run(['sudo', 'apt-get', '-qq', 'install', '-y', 'rclone'])
 import configparser, re, tempfile
 from urllib.parse import urlparse
 config_source = Path(RCLONE_CONFIG_PATH).expanduser()
+if not config_source.is_absolute():
+    raise ValueError('RCLONE_CONFIG_PATH must be absolute, e.g. /content/rclone.conf')
 if not config_source.is_file():
     raise FileNotFoundError(f'Upload your authenticated rclone.conf or mount Drive: {config_source}')
 sections = configparser.RawConfigParser()
@@ -127,7 +153,7 @@ data_setup = [md('''## Prepare data on Colab SSD
 The download location is automatically derived from ROOT_FOLDER_ID.
 '''), code('''USE_DRIVE_DATA = True
 if USE_DRIVE_DATA:
-    copy(cloud('task6-data/raw'), 'data/raw')
+    copy(cloud('task6-data/raw'), PROJECT_ROOT / 'data/raw')
 else:
     stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'download'], check=True)
 stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=True)
@@ -135,9 +161,10 @@ stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'], check=
 
 gpu_setup = setup + [md('''## Install GPU environment
 Restart the runtime if requested, then rerun clone/setup. GPU training has not been run on the CPU-only development machine.
-'''), code('''%pip -q install -r requirements.txt
-!python -m pip check
-!nvidia-smi
+'''), code('''stream_run([sys.executable, '-m', 'pip', 'install', '-r', str(PROJECT_ROOT / 'requirements.txt')])
+# Colab may have unrelated preinstalled-package conflicts; print the full report.
+stream_run([sys.executable, '-m', 'pip', 'check'], check=False)
+stream_run(['nvidia-smi'])
 '''), code('''# Fail early on dependency/import errors before downloading data or starting training.
 import subprocess, sys
 stream_run([sys.executable, '-c', """
@@ -150,6 +177,18 @@ from swift.llm import TrainArguments, RLHFArguments
 import qwen_vl_utils
 import decord
 from vllm import LLM
+import mmcultureqa.common
+import mmcultureqa.data.prepare
+import mmcultureqa.training.sft
+import mmcultureqa.training.grpo
+import mmcultureqa.training.curves
+import mmcultureqa.inference.predict
+import mmcultureqa.evaluate
+from swift.llm.train.sft import SwiftSft
+from swift.llm.train.rlhf import SwiftRLHF
+from swift.llm import VllmEngine, InferRequest, RequestConfig
+from swift.plugin import metric_mapping, orms, ORM
+from swift.utils import Serializer
 print('Training imports OK', flush=True)
 """])
 ''')] + storage + data_setup + [md('''## Experiment settings
@@ -166,7 +205,7 @@ RUN_FULL = True  # full training from YAML; False explicitly selects a one-step 
 RUN_NAME = 'experiment01'
 if not re.fullmatch(r'[A-Za-z0-9_-]+', RUN_NAME):
     raise ValueError('RUN_NAME must contain only letters, numbers, underscores or hyphens')
-RUNS = Path('outputs/runs') / RUN_NAME
+RUNS = PROJECT_ROOT / 'outputs/runs' / RUN_NAME
 RUNS.mkdir(parents=True, exist_ok=True)
 SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
 GRPO_STAGE = 'grpo' if RUN_FULL else 'grpo-smoke'
@@ -181,22 +220,36 @@ def upload_run(local_output, cloud_subdir):
          '--exclude', '/checkpoint-*', '--exclude', '/checkpoint-*/**',
          '--exclude', '/swift_data/**')
 
-def run(module, config, overrides, local_output, cloud_subdir):
-    cmd = [sys.executable, '-m', module, '--config', config]
+def run_command(module, config, overrides):
+    config = Path(config)
+    if not config.is_absolute():
+        config = PROJECT_ROOT / config
+    if not config.is_file():
+        raise FileNotFoundError(f'Configuration not found: {config}')
+    cmd = [sys.executable, '-m', module, '--config', str(config)]
     for key, value in overrides.items():
         cmd += ['--set', f'{key}={json.dumps(value)}']
     stream_run(cmd, check=True)
-    if not (Path(local_output) / 'final/adapter_config.json').is_file():
-        raise FileNotFoundError('Training finished without a final adapter; nothing uploaded')
+
+def require_adapter(folder):
+    folder = Path(folder)
+    if not (folder / 'adapter_config.json').is_file():
+        raise FileNotFoundError(f'Adapter config missing: {folder}')
+    if not any((folder / name).is_file() for name in ('adapter_model.safetensors', 'adapter_model.bin')):
+        raise FileNotFoundError(f'Adapter weights missing: {folder}')
+
+def run(module, config, overrides, local_output, cloud_subdir):
+    run_command(module, config, overrides)
+    require_adapter(Path(local_output) / 'final')
     upload_run(local_output, cloud_subdir)
 ''')]
 
 transfer = setup + storage + [md('''## Download English QA and upload automatically below MMCQA
 Includes train/dev/devtest JSONL, Parquet and image ZIPs; excludes audio and other languages.
 Only compressed archives and labels are uploaded. All later notebooks use the same relative data path.
-'''), code('''%pip -q install huggingface-hub==0.36.0 Pillow==11.3.0
-!python -m mmcultureqa.data.prepare download
-!python -m mmcultureqa.data.prepare prepare
+'''), code('''stream_run([sys.executable, '-m', 'pip', 'install', 'huggingface-hub==0.36.0', 'Pillow==11.3.0'])
+stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'download'])
+stream_run([sys.executable, '-m', 'mmcultureqa.data.prepare', 'prepare'])
 '''), code('''filters = ['--exclude', '.cache/**', '--exclude', 'train/**', '--exclude', 'dev/**', '--exclude', 'devtest/**']
 copy('data/raw', cloud('task6-data/raw'), *filters)
 stream_run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
@@ -242,12 +295,9 @@ INPUT_SFT_STAGE = 'sft' if RUN_FULL else 'sft-smoke'
 SFT_CHECKPOINT = 'final'  # or checkpoint-N
 GRPO_OVERRIDES = {}  # e.g. {'reward.device': 'cuda', 'training.learning_rate': 0.000005}
 RESUME_CHECKPOINT = ''  # manually backed-up GRPO checkpoint-N only
-local_adapter = Path('outputs/inputs/sft') / SFT_RUN_NAME / INPUT_SFT_STAGE / SFT_CHECKPOINT
+local_adapter = PROJECT_ROOT / 'outputs/inputs/sft' / SFT_RUN_NAME / INPUT_SFT_STAGE / SFT_CHECKPOINT
 copy(cloud(f'task6-runs/{SFT_RUN_NAME}/{INPUT_SFT_STAGE}/{SFT_CHECKPOINT}'), local_adapter)
-if not (local_adapter / 'adapter_config.json').is_file():
-    raise FileNotFoundError('SFT adapter not found. Check the selected run/stage/checkpoint.')
-if not any((local_adapter / name).is_file() for name in ['adapter_model.safetensors', 'adapter_model.bin']):
-    raise FileNotFoundError('SFT weights missing; complete SFT save/upload first')
+require_adapter(local_adapter)
 grpo_args = {**common, 'training.predict_with_generate': True,
              'model.adapter': str(local_adapter), 'model.adapter_revision': None,
              'training.output_dir': GRPO}
@@ -289,17 +339,11 @@ Validation points appear only at completed evaluation intervals; no interpolatio
 '''), code('''import sys
 from pathlib import Path
 
-project = Path(CHECKOUT) / PROJECT_SUBDIR
-src = project / 'src'
-if not (src / 'mmcultureqa/training/curves.py').is_file():
-    raise FileNotFoundError(f'Learning-curve module not found under {src}')
-sys.path.insert(0, str(src))
-
 from mmcultureqa.training.curves import plot_learning_curves
 
 local_run = Path(__RUN_DIR__)
 if not local_run.is_absolute():
-    local_run = project / local_run
+    local_run = PROJECT_ROOT / local_run
 plot_learning_curves(local_run, '__LABEL__')
 upload_run(local_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 '''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable).replace('__LABEL__', label))]
@@ -322,16 +366,20 @@ if SPLIT not in {'devtest', 'test'}:
 ADAPTER_STAGES = {'sft': SFT_STAGE, 'grpo': GRPO_STAGE}
 predictions = RUNS / 'predictions'
 for label, stage in ADAPTER_STAGES.items():
-    adapter = Path('outputs/inputs/inference') / INPUT_RUN_NAME / stage / 'final'
+    adapter = PROJECT_ROOT / 'outputs/inputs/inference' / INPUT_RUN_NAME / stage / 'final'
     copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{stage}/final'), adapter)
+    require_adapter(adapter)
     overrides = {**common, 'model.adapter': str(adapter), 'model.adapter_revision': None,
                  'inference.backend': 'transformers' if USE_4BIT else 'vllm',
                  'inference.split': SPLIT, 'inference.output': str(predictions / f'{label}_{SPLIT}.jsonl')}
     overrides['data.limit'] = TEST_LIMIT
-    run('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides,
-        predictions, f'task6-runs/{RUN_NAME}/predictions')
+    run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
+    prediction_file = predictions / f'{label}_{SPLIT}.jsonl'
+    if not prediction_file.is_file():
+        raise FileNotFoundError(f'Inference produced no predictions: {prediction_file}')
+    copy(predictions, cloud(f'task6-runs/{RUN_NAME}/predictions'))
 '''), code('''from mmcultureqa.common import read_jsonl, write_jsonl
-test_rows = read_jsonl(Path('data/prepared') / f'{SPLIT}.jsonl')
+test_rows = read_jsonl(PROJECT_ROOT / 'data/prepared' / f'{SPLIT}.jsonl')
 if TEST_LIMIT is not None:
     test_rows = test_rows[:TEST_LIMIT]
 if test_rows and all(row.get('answer') for row in test_rows):

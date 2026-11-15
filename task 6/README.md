@@ -34,6 +34,24 @@ MMCQA/                           ← ROOT_FOLDER_ID
 
 Mỗi notebook clone repo `iamtro-2006/semeval` và cài package trong `task 6/`. Không ZIP/upload code. Dùng cùng `ROOT_FOLDER_ID` trong các phiên để đồng bộ. File rclone gốc không bị sửa; dùng bản sao tạm để refresh token. Nếu config nằm trên Drive thì chạy cell mount tùy chọn chỉ để đọc config.
 
+Mặc định Colab làm việc theo cấu trúc sau, kể cả khi mở notebook từ GitHub và kernel bắt đầu tại `/content`:
+
+```text
+/content/
+├── rclone.conf                  config đã xác thực, upload riêng
+└── semeval/                     CHECKOUT: repo clone
+    └── task 6/                  PROJECT_ROOT
+        ├── src/mmcultureqa/     module Python
+        ├── configs/             cấu hình SFT/GRPO/inference
+        ├── data/raw/            dữ liệu tải từ Drive/Hugging Face
+        ├── data/prepared/       manifest có đường dẫn ảnh tương đối với project
+        └── outputs/            adapter đầu vào, run và predictions local
+```
+
+Setup xác định `PROJECT_ROOT` từ `CHECKOUT`, thêm `src` vào `sys.path` của kernel và `PYTHONPATH` cho subprocess/worker, xóa cache module project cũ rồi kiểm tra import ngay. Mọi lệnh Python dùng `sys.executable`; launcher cố định thư mục chạy ở `PROJECT_ROOT`. Đường dẫn config, run và adapter trong notebook là tuyệt đối, không phụ thuộc cell sau có đổi thư mục làm việc. `CHECKOUT` và `RCLONE_CONFIG_PATH` phải là đường dẫn tuyệt đối; không đặt config vào repo.
+
+Inference dùng launcher riêng, kiểm tra adapter đầu vào và upload predictions sau mỗi stage thành công. Thư mục predictions không cần chứa `final/` của training. Sau khi cập nhật notebook, chạy lại từ cell setup; nếu vừa thay dependency nhị phân thì restart runtime rồi chạy lại từ đầu.
+
 `RUN_FULL=False` mặc định chạy thử một optimizer step; full run dùng tên experiment mới và `RUN_FULL=True`. Khi chạy GRPO đầy đủ, chọn adapter SFT đầy đủ. `final` chứa adapter + processor, không chứa bản sao toàn bộ Qwen. Resume cùng stage dùng `RESUME_CHECKPOINT='checkpoint-N'` chỉ khi đã tự sao lưu checkpoint đầy đủ lên Drive, giữ nguyên cấu hình; chuyển SFT sang GRPO dùng adapter và optimizer GRPO mới.
 
 Đánh giá cuối trong hai notebook train mặc định luôn dùng **đủ 1.000 mẫu validation**, độc lập với số mẫu/step smoke training. `VAL_LIMIT=None` là full; đổi thành `4` chỉ để thử pipeline đánh giá, kết quả subset được lưu tên riêng, không gọi là full-val. Scorer báo BERTScore-F1/P/R, BLEU, ROUGE-L và Coverage; đây không phải tỷ lệ exact-match accuracy. Đánh giá cuối không thay thế monitoring định kỳ: SFT mặc định chọn checkpoint bằng val loss; bật generation thì chọn bằng val BERTScore-F1. GRPO giữ checkpoint cuối và log reward theo cơ chế ms-swift.
@@ -54,6 +72,14 @@ Sửa notebook generator rồi sinh lại:
 ```bash
 python tools/build_notebooks.py
 ```
+
+Kiểm tra hồi quy đường dẫn/import và launcher trên CPU (từ thư mục repo):
+
+```bash
+python -m unittest discover -s "task 6/tests" -v
+```
+
+Các kiểm tra mô phỏng layout `content/semeval/task 6` trong thư mục tạm, chạy import thật ở kernel/Python con sau khi đổi working directory, và giả lập train/inference/rclone để kiểm tra đường dẫn cùng upload. Chúng không thay thế lượt chạy GPU Colab với các dependency runtime.
 
 ## Dữ liệu đã kiểm tra thực tế
 
