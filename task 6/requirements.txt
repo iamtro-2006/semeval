@@ -8,6 +8,8 @@ peft==0.18.1
 accelerate==1.12.0
 datasets==3.6.0
 ms-swift==3.11.3
+# Imported unconditionally by ms-swift GRPO utilities, including without vLLM.
+msgspec==0.19.0
 qwen-vl-utils==0.0.14
 decord==0.6.0; platform_system == "Linux"
 huggingface-hub==0.36.0

@@ -7,6 +7,7 @@
 - Single-GPU recipe: train microbatch 4, accumulation 4, steps_per_generation 4, 16 rollout completions / 4 questions, eval batch 8, num_generations 4. Eval grouping and generation grouping are validated before GPU model allocation.
 - CPU regressions check actual inherited YAML -> native arguments, NF4/BF16 flags, grouping after overrides, separate SFT input/QLoRA output runs, optional vLLM install/import checks, and Transformers selection for final validation.
 - Disabled-vLLM native arguments explicitly set `vllm_mode=None`, including after stale mode overrides. The actual `_init_rollout` method extracted from pinned ms-swift 3.11.3 source was executed with the Transformers flags to verify its mode guard accepts this combination; full GPU initialization remains untested.
+- `msgspec==0.19.0` is declared directly: pinned ms-swift GRPO utilities import it even without vLLM. Notebook preflight and the GRPO launcher import the concrete GRPO trainer before loading model/scorer weights so lazy dependency failures surface early. Actual trainer imports still need verification in the Colab GPU environment.
 - GPU quantized loading, generation/backward, batch-4 VRAM fitting, numerical quality and speed vs the previous BF16/vLLM recipe have not been benchmarked. A CPU test pass does not establish a sub-eight-hour runtime.
 
 ## Earlier dataset and backend checks

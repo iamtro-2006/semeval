@@ -153,6 +153,9 @@ def train(cfg, stage):
     from swift.llm import TrainArguments, RLHFArguments
     from swift.llm.train.sft import SwiftSft
     from swift.llm.train.rlhf import SwiftRLHF
+    if stage == 'grpo':
+        # Force lazy trainer dependencies to fail before loading the scorer or Qwen.
+        from swift.trainers.rlhf_trainer.grpo_trainer import GRPOTrainer
     from transformers import TrainerCallback
     from .swift_metrics import register_plugins
     from ..storage import checkpoint_callbacks

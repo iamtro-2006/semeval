@@ -172,7 +172,7 @@ import subprocess, sys
 stream_run([sys.executable, '-c', """
 import sys
 from importlib.metadata import version
-for name in ('numpy', 'torch', 'transformers', 'peft', 'trl', 'ms-swift', 'bitsandbytes'):
+for name in ('numpy', 'torch', 'transformers', 'peft', 'trl', 'ms-swift', 'bitsandbytes', 'msgspec'):
     print(name, version(name), flush=True)
 from transformers.modeling_utils import PreTrainedModel
 from peft import PeftModel
@@ -190,6 +190,9 @@ import mmcultureqa.inference.predict
 import mmcultureqa.evaluate
 from swift.llm.train.sft import SwiftSft
 from swift.llm.train.rlhf import SwiftRLHF
+# Import the concrete trainer too: SwiftRLHF alone leaves its dependencies lazy.
+from swift.trainers.rlhf_trainer.grpo_trainer import GRPOTrainer
+from msgspec import field
 from swift.llm import InferRequest, RequestConfig
 if sys.argv[1] == '1':
     print('vllm', version('vllm'), flush=True)
