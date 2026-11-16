@@ -59,7 +59,7 @@ monitor:
   device: cuda
   dtype: float16
   batch_size: 4
-  limit: 256  # fixed random subset, seed 42, for periodic evaluation only
+  limit: null  # use the full validation set for teacher-forced loss/token accuracy
   max_new_tokens: 256
 swift: {}  # optional native ms-swift TrainArguments/RLHFArguments overrides
 resume_from_checkpoint: null

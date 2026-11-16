@@ -317,6 +317,7 @@ print(ROOT)
 
     def test_native_grpo_arguments_use_qlora_and_batched_transformers(self):
         cfg = self.grpo_config()
+        self.assertEqual(cfg['monitor']['limit'], 256)
         from mmcultureqa.training.swift_backend import build_arguments
         with patch.dict(os.environ, WORLD_SIZE='1'):
             args = build_arguments(cfg, 'grpo')
@@ -350,8 +351,13 @@ print(ROOT)
         with patch.object(sys, 'argv', ['test', '--config', str(self.project / 'configs/sft.yaml')]):
             cfg = config()
         self.assertIsNone(cfg['data']['limit'])
-        self.assertEqual(cfg['monitor']['limit'], 256)
+        self.assertIsNone(cfg['monitor']['limit'])
+        from mmcultureqa.common import write_jsonl
+        write_jsonl(self.project / 'data/prepared/validation.jsonl', [
+            dict(id=f'val-{i}', image=f'val-{i}.jpg', question='Val?', answer='Gold') for i in range(1000)])
         args = build_arguments(cfg, 'sft')
+        self.assertEqual(len(Path(args['val_dataset'][0]).read_text(encoding='utf-8').splitlines()), 1000)
+        self.assertEqual(args['acc_strategy'], 'token')
         self.assertEqual(args['quant_bits'], 4)
         self.assertEqual(args['bnb_4bit_quant_type'], 'nf4')
         self.assertEqual(args['bnb_4bit_compute_dtype'], 'bfloat16')

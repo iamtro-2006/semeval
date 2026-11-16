@@ -307,7 +307,7 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
 Default PREDICT_WITH_GENERATE=False: teacher-forced validation loss and token accuracy.
 NF4 base, BF16 compute; train batch 8 x accumulation 1 preserves effective batch 8 on one GPU.
-Periodic validation: batch 8, fixed random subset of 256 questions, seed 42, every 225 steps.
+Periodic validation: batch 8, ALL validation questions (1,000), every 225 steps.
 Full training runs 2 epochs and selects the lowest val loss checkpoint.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
 TRAIN_PROJECTOR optionally adds LoRA to the vision-language merger and DeepStack mergers; ViT stays frozen.

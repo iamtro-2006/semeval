@@ -36,6 +36,8 @@ training:
   sleep_level: 0
   offload_model: false
   offload_optimizer: false
+monitor:
+  limit: 256  # preserve the paused GRPO recipe independently of SFT monitoring defaults
 reward:
   type: mmbert
   model: jhu-clsp/mmBERT-base

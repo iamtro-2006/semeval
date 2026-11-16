@@ -14,7 +14,7 @@ Pipeline hiện tại ưu tiên SFT trên Qwen3-VL-4B-Instruct. Train bằng QLo
 | Batch training / accumulation | 8 / 1, effective batch 8 trên một GPU |
 | Validation định kỳ | Teacher forcing: loss và token accuracy, không generation/mmBERT |
 | Eval/save | Mỗi 225 optimizer step |
-| Tập monitor | 256 mẫu val ngẫu nhiên không lặp, seed 42, cố định |
+| Tập monitor SFT | Toàn bộ 1.000 mẫu validation (`monitor.limit=null`) |
 | Chọn best | Val loss thấp nhất |
 | LoRA mặc định trong YAML | r=16, alpha=32; chỉnh qua SFT_OVERRIDES nếu muốn |
 | Projector LoRA | Tùy chọn, mặc định tắt |
@@ -125,7 +125,7 @@ Inference mặc định BF16, không lượng tử hóa lại bản merged. Proc
 
 ## Validation
 
-`monitor.limit=256` chỉ giới hạn val định kỳ, không giới hạn train. Mẫu được chọn bằng random generator riêng seed 42, không lặp và không đổi qua các lần eval nếu manifest giữ nguyên. `null` dùng toàn bộ val; giới hạn lớn hơn số mẫu giữ nguyên thứ tự đầy đủ.
+SFT mặc định `monitor.limit=null`, dùng đủ 1.000 mẫu val cho loss/token accuracy định kỳ, không giới hạn train. Nếu chủ động đặt một giới hạn nhỏ hơn số mẫu, subset được chọn ngẫu nhiên seed 42, không lặp và không đổi qua các lần eval nếu manifest giữ nguyên. Recipe GRPO đang tạm dừng giữ riêng `monitor.limit=256` như trước, không bị thay đổi theo mặc định SFT.
 
 Trong lúc SFT mặc định không preload mmBERT, không sinh đáp án khi eval và chọn best bằng val loss. `PREDICT_WITH_GENERATE=True` là tùy chọn quay lại generation/F1, không phải default experiment03.
 

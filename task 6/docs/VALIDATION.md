@@ -2,12 +2,12 @@
 
 ## Experiment03 SFT + merged BF16 artifacts
 
-- SFT defaults: 2 epochs, peak LR 1e-4, microbatch 8 / accumulation 1, eval/save every 225 steps, teacher-forced loss/token accuracy on the fixed seed-42 monitor subset. No periodic generation or mmBERT; best selected by lowest val loss.
+- SFT defaults: 2 epochs, peak LR 1e-4, microbatch 8 / accumulation 1, eval/save every 225 steps, teacher-forced loss/token accuracy on the FULL 1,000-row validation set. No periodic generation or mmBERT; best selected by lowest val loss. GRPO keeps an explicit 256-row monitor limit to preserve its paused recipe.
 - Projector LoRA is optional (off by default), explicitly selecting Qwen3-VL merger/DeepStack linear_fc1/linear_fc2 in addition to all existing language attention/MLP targets. ViT stays frozen; training checks requested projector parameters are trainable.
 - The training subprocess saves the selected adapter locally. A separate exporter reloads the original BF16 base, applies the selected adapter, safely merges, saves processor/tokenizer + frozen prompt/run metadata, validates all weight shards, then atomically publishes best_model. SFT uploads only that complete model and reports.
 - Inference downloads experiment03's merged model from Drive; local-only BF16 loading has no adapter or original-Qwen Hub fallback. Final validation uses this exported BF16 artifact once on the full manifest. Legacy adapter evaluation remains supported.
 - CPU tests use mocks for model libraries to check BF16 reload flags, selected adapter provenance, safe merge call, idempotency/no-overwrite, complete shard validation, local-only loading, upload filters and notebook paths. They do not execute actual PEFT merges or GPU forward/backward.
-- The GRPO notebook and its YAML are unchanged. Existing GRPO hyperparameters/backend are preserved; the new SFT/inference workflow does not require a GRPO output.
+- The GRPO notebook is unchanged. Its YAML explicitly preserves the existing monitor limit; GRPO hyperparameters/backend are preserved and the new SFT/inference workflow does not require a GRPO output.
 
 ## Earlier recipe checks
 
