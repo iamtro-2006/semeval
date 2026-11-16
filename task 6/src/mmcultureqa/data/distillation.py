@@ -1,6 +1,7 @@
 """Portable teacher artifacts and strict student/answer formatting (no GPU imports)."""
 import hashlib
 import json
+import random
 import re
 
 from ..common import path, read_jsonl
@@ -8,6 +9,15 @@ from ..common import path, read_jsonl
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def sample_rows(rows, limit, seed=42):
+    """Reproducible sampling without replacement, without changing global RNG state."""
+    if limit is None:
+        return list(rows)
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise ValueError('Sample size must be a positive integer or null')
+    return random.Random(seed).sample(rows, min(limit, len(rows)))
 
 
 def parse_teacher(text, finish_reason):
@@ -61,7 +71,9 @@ def load_reasoned_train(cfg, train, validation):
     """Join by exact source rows and verify hashes, completeness, coverage and split isolation."""
     directory = path(cfg['data']['reasoning_dir'])
     report = json.loads((directory / 'dataset.json').read_text(encoding='utf-8'))
-    if report.get('schema_version') != 1 or report.get('complete') is not True or report.get('smoke'):
+    smoke = cfg['data'].get('reasoning_smoke', False)
+    if (report.get('schema_version') != 1 or report.get('complete') is not True
+            or (report.get('smoke') and not smoke)):
         raise ValueError('Reasoning dataset is incomplete or smoke-only')
     if report['source_train_hash'] != digest(train) or report['source_validation_hash'] != digest(validation):
         raise ValueError('Teacher/student train or validation split mismatch')
@@ -69,7 +81,13 @@ def load_reasoned_train(cfg, train, validation):
     records = read_jsonl(directory / 'train_reasoning.jsonl')
     if digest(records) != report['accepted_hash']:
         raise ValueError('Reasoning dataset hash mismatch')
-    sources = {r['id']: r for r in train}
+    source_rows = train
+    if report.get('smoke'):
+        source_rows = sample_rows(train, report['sample_size'], report['sample_seed'])
+        if (report.get('selected_ids') != [r['id'] for r in source_rows]
+                or report.get('attempted') != len(source_rows)):
+            raise ValueError('Teacher smoke selection mismatch')
+    sources = {r['id']: r for r in source_rows}
     seen, result = set(), []
     for row in records:
         key = row['id']
@@ -82,9 +100,13 @@ def load_reasoned_train(cfg, train, validation):
         if not isinstance(row.get('reasoning'), str) or not row['reasoning'].strip():
             raise ValueError(f'Missing reasoning: {key}')
         result.append({**original, 'reasoning': row['reasoning']})
-    coverage = len(result) / len(train)
+    coverage = len(result) / len(source_rows)
     minimum = cfg['data'].get('reasoning_min_coverage', 0.95)
     if not 0 < minimum <= 1 or coverage < minimum or len(result) != report['accepted']:
         raise ValueError(f'Reasoning coverage {coverage:.1%} below requirement {minimum:.1%}, or count mismatch')
-    print(f'Reasoning train: {len(result)}/{len(train)} ({coverage:.1%}); rejected samples excluded', flush=True)
+    if smoke:
+        result = sample_rows(result, cfg['data'].get('reasoning_smoke_size', 100),
+                             cfg['data'].get('reasoning_smoke_seed', 42))
+        cfg['reasoning']['smoke_train_ids'] = [r['id'] for r in result]
+    print(f'Reasoning train: {len(result)} selected; source coverage {coverage:.1%}; rejected samples excluded', flush=True)
     return result

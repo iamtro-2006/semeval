@@ -4,7 +4,7 @@ import os
 import random
 
 from ..common import config, image, path, read_jsonl, write_jsonl
-from .distillation import digest, parse_teacher
+from .distillation import digest, parse_teacher, sample_rows
 
 
 def atomic_json(file, value):
@@ -42,11 +42,13 @@ def generate_dataset(cfg):
             raise ValueError(f'teacher.{key} must be positive')
     if tc.get('limit') is not None and tc['limit'] < 1:
         raise ValueError('teacher.limit must be null or positive')
-    selected = train[:tc['limit']] if tc.get('limit') is not None else train
+    selected = sample_rows(train, tc.get('limit'), tc['seed'])
     prompt = path(cfg['prompt_file']).read_text(encoding='utf-8')
     spec = {'teacher': tc, 'system_prompt': cfg['system_prompt'], 'prompt': prompt,
             'pixels': {k: cfg['model'][k] for k in ('min_pixels', 'max_pixels')},
             'source_train_hash': digest(train), 'source_validation_hash': digest(validation)}
+    if tc.get('limit') is not None:
+        spec['sampling'] = 'random_without_replacement'
     fingerprint = digest(spec)
     output = path(tc['output_dir'])
     output.mkdir(parents=True, exist_ok=True)
@@ -139,6 +141,8 @@ def generate_dataset(cfg):
               'rejected': len(rejected), 'accepted_hash': digest(accepted),
               'source_train_hash': digest(train), 'source_validation_hash': digest(validation),
               'teacher': tc['name'], 'teacher_revision': metadata['resolved_revision'],
+              'sample_size': tc.get('limit'), 'sample_seed': tc['seed'],
+              'selected_ids': [r['id'] for r in selected],
               'note': 'Answer-conditioned synthetic solutions; structural checks are not factual verification.'}
     atomic_json(output / 'dataset.json', report)
     print(json.dumps(report, indent=2), flush=True)

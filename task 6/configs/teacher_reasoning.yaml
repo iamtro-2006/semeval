@@ -1,11 +1,11 @@
 extends: configs/sft.yaml
 prompt_file: prompts/teacher_reasoning.txt
-system_prompt: You are a visual reasoning assistant with expertise in cultures worldwide. Ground cultural claims in evidence and distinguish observation from knowledge.
+system_prompt: You are a cultural expert helping people understand images and answer questions accurately with culturally grounded knowledge.
 teacher:
   name: Qwen/Qwen3-VL-8B-Thinking-FP8
   revision: main  # resolved to an immutable Hub commit on first run; reused on resume
   output_dir: outputs/reasoning/cultural_teacher01
-  limit: null  # all TRAIN rows; a non-null limit creates a separate smoke dataset
+  limit: null  # all TRAIN rows; otherwise random sample without replacement, seeded below
   batch_size: 8
   max_num_seqs: 4
   max_model_len: 8192

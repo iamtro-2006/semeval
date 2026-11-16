@@ -506,13 +506,15 @@ Inspect audit_sample.jsonl and rejected.jsonl before investing in student traini
 '''), code('''import json
 from mmcultureqa.storage import upload_filters
 TEACHER_RUN_NAME = 'cultural_teacher01'
+SMOKE = False  # True: generate only 100 random training samples, seed 42
 RESUME_FROM_DRIVE = False  # True only if this teacher run already exists on Drive
-TEACHER_LIMIT = None  # all train rows; use a DIFFERENT run name for a smoke subset
+TEACHER_LIMIT = 100 if SMOKE else None
 TEACHER_OVERRIDES = {}  # e.g. {'teacher.batch_size': 4, 'teacher.max_num_seqs': 2} if memory is tight
 if not re.fullmatch(r'[A-Za-z0-9_-]+', TEACHER_RUN_NAME):
     raise ValueError('Choose a valid teacher run name')
-teacher_dir = PROJECT_ROOT / 'outputs/reasoning' / TEACHER_RUN_NAME
-teacher_cloud = f'task6-data/reasoning/{TEACHER_RUN_NAME}'
+teacher_name = TEACHER_RUN_NAME + ('-smoke100' if SMOKE else '')
+teacher_dir = PROJECT_ROOT / 'outputs/reasoning' / teacher_name
+teacher_cloud = f'task6-data/reasoning/{teacher_name}'
 if RESUME_FROM_DRIVE:
     copy(cloud(teacher_cloud), teacher_dir, *upload_filters('reasoning'))
 teacher_args = {'teacher.output_dir': str(teacher_dir), 'teacher.limit': TEACHER_LIMIT, **TEACHER_OVERRIDES}
@@ -544,36 +546,50 @@ for cell in sft_notebook:
     source = source.replace('experiment03', 'experiment04_reasoning').replace('Experiment 03', 'Reasoning distillation')
     if cell['cell_type'] == 'code':
         source = source.replace("'configs/sft.yaml'", "'configs/sft_reasoning.yaml'")
+        source = source.replace('False explicitly selects a one-step smoke run',
+                                'False trains up to 100 random reasoning samples, seed 42')
         if 'TRAIN_PROJECTOR = False' in source:
             reasoning_notebook += [md('''## Download the completed teacher dataset
 Train a fresh Qwen3-VL-4B-Instruct adapter with <think>steps</think><answer>gold</answer>.
 The student prompt contains only image + question. Gold answers are supervision, never input.
 Default microbatch 2 × accumulation 4 keeps effective batch 8 as reasoning increases sequence length.
-Teacher data must cover at least 95% of train, with matching source splits and no smoke flag.
+Full mode requires full teacher data. RUN_FULL=False trains up to 100 random accepted rows, seed 42.
+Smoke uses teacher's -smoke100 dataset by default; set TEACHER_SMOKE_DATA=False to sample a full teacher dataset.
+Source coverage must be at least 95%; smoke data is rejected by full training.
 Rejected teacher rows are excluded. Inspect the audit sample from notebook 05 first.
 Periodic full validation uses only held-out gold answers, with no synthetic validation rationale;
 its teacher-forced loss is a proxy and does not evaluate reasoning quality.
 Final vLLM evaluation generates reasoning, extracts only <answer>, then applies the usual scorer.
 '''), code('''TEACHER_RUN_NAME = 'cultural_teacher01'
+TEACHER_SMOKE_DATA = not RUN_FULL  # False: use full teacher data even for a student smoke run
 if not re.fullmatch(r'[A-Za-z0-9_-]+', TEACHER_RUN_NAME):
     raise ValueError('Choose a valid teacher run name')
 from mmcultureqa.common import read_jsonl
 from mmcultureqa.data.distillation import load_reasoned_train
 from mmcultureqa.storage import upload_filters
-reasoning_dir = PROJECT_ROOT / 'data/reasoning' / TEACHER_RUN_NAME
+teacher_name = TEACHER_RUN_NAME + ('-smoke100' if TEACHER_SMOKE_DATA else '')
+reasoning_dir = PROJECT_ROOT / 'data/reasoning' / teacher_name
 # Only the finished dataset and its provenance are needed to train the student.
-copy(cloud(f'task6-data/reasoning/{TEACHER_RUN_NAME}'), reasoning_dir,
+copy(cloud(f'task6-data/reasoning/{teacher_name}'), reasoning_dir,
      '--include', '/train_reasoning.jsonl', '--include', '/dataset.json', '--include', '/generation.json', '--exclude', '**')
-check_cfg = {'data': {'reasoning_dir': str(reasoning_dir), 'reasoning_min_coverage': 0.95}}
+check_cfg = {'data': {'reasoning_dir': str(reasoning_dir), 'reasoning_min_coverage': 0.95,
+                      'reasoning_smoke': not RUN_FULL, 'reasoning_smoke_size': 100, 'reasoning_smoke_seed': 42}}
 load_reasoned_train(check_cfg, read_jsonl(PROJECT_ROOT / 'data/prepared/train.jsonl'),
                     read_jsonl(PROJECT_ROOT / 'data/prepared/validation.jsonl'))
 ''')]
-            source = source.replace('SFT_OVERRIDES = {}', "SFT_OVERRIDES = {'data.reasoning_dir': str(reasoning_dir)}")
+            source = source.replace('SFT_OVERRIDES = {}',
+                "SFT_OVERRIDES = {'data.reasoning_dir': str(reasoning_dir), 'data.reasoning_smoke': not RUN_FULL}")
+            source = source.replace(
+                "sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',\n"
+                "                     'training.load_best_model_at_end': False, 'training.save_steps': 1})",
+                "sft_args.update({'data.limit': None, 'data.reasoning_smoke': True})")
         reasoning_notebook.append(code(source))
     else:
         source = source.replace('train batch 8 x accumulation 1', 'train batch 2 x accumulation 4')
         source = source.replace('batch 8 and accumulation 1', 'batch 2 and accumulation 4')
         source = source.replace('Periodic validation: batch 8', 'Periodic validation: batch 4')
+        source = source.replace('Default: ALL 1,000 validation examples, even after a one-step training smoke run.',
+                                'Default: ALL 1,000 validation examples, including after a 100-row smoke run.')
         reasoning_notebook.append(md(source))
 
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),

@@ -123,7 +123,7 @@ print(ROOT)
             self.assertEqual(result.returncode, 0)
         self.assertEqual(children[-1][1]['cwd'], self.project)
 
-    def experiment(self, notebook='02_sft_colab'):
+    def experiment(self, notebook='02_sft_colab', smoke=False):
         commands, copies = [], []
         self.copy_options = []
         sys.path.insert(0, str(self.project / 'src'))
@@ -161,7 +161,10 @@ print(ROOT)
         import re
         ns = dict(PROJECT_ROOT=self.project, Path=Path, re=re, sys=sys, stream_run=stream_run,
                   copy=copy, cloud=lambda p: f'remote:{p}')
-        exec(find_cell(notebook, 'USE_4BIT ='), ns)
+        settings = find_cell(notebook, 'USE_4BIT =')
+        if smoke:
+            settings = settings.replace('RUN_FULL = True', 'RUN_FULL = False')
+        exec(settings, ns)
         os.chdir(self.content)
         return ns, commands, copies
 
@@ -812,6 +815,73 @@ print(ROOT)
         self.assertIn('data.reasoning_dir=' + json.dumps(str(ns['reasoning_dir'])), commands[0])
         self.assertEqual([c[2] for c in commands], ['mmcultureqa.training.sft', 'mmcultureqa.export'])
         self.assertTrue(any(dest == 'remote:task6-runs/experiment04_reasoning/sft' for _, dest in copies))
+
+    def test_teacher_and_student_smoke_use_100_seed42_training_rows(self):
+        self.grpo_config()
+        from mmcultureqa.common import config, read_jsonl, write_jsonl
+        from mmcultureqa.data.distillation import digest, sample_rows, load_reasoned_train
+        from mmcultureqa.data.teacher_reasoning import generate_dataset
+        with patch.object(sys, 'argv', ['teacher', '--config', str(self.project / 'configs/teacher_reasoning.yaml')]):
+            cfg = config()
+        train = [dict(id=f'train-{i}', question=f'Question {i}?', answer=f'Gold {i}', image=f'image-{i}.jpg') for i in range(160)]
+        write_jsonl(self.project / 'data/prepared/train.jsonl', train)
+        validation = read_jsonl(self.project / 'data/prepared/validation.jsonl')
+        before = random.getstate()
+        selected = sample_rows(train, 100, 42)
+        self.assertEqual(selected, random.Random(42).sample(train, 100))
+        self.assertNotEqual(selected, train[:100])
+        self.assertEqual(len({r['id'] for r in selected}), 100)
+        self.assertEqual(random.getstate(), before)
+        cfg['teacher']['limit'] = 100
+        folder = self.project / cfg['teacher']['output_dir']
+        folder.mkdir(parents=True)
+        spec = {'teacher': cfg['teacher'], 'system_prompt': cfg['system_prompt'],
+                'prompt': (self.project / cfg['prompt_file']).read_text(encoding='utf-8'),
+                'pixels': {k: cfg['model'][k] for k in ('min_pixels', 'max_pixels')},
+                'source_train_hash': digest(train), 'source_validation_hash': digest(validation),
+                'sampling': 'random_without_replacement'}
+        (folder / 'generation.json').write_text(json.dumps({'fingerprint': digest(spec), 'resolved_revision': 'fixed'}), encoding='utf-8')
+        write_jsonl(folder / 'attempts.jsonl', [{'id': r['id'], 'reasoning': '1. Observe.\n2. Connect.\n3. Conclude.', 'attempts': []} for r in selected])
+        # A completed smoke journal exercises selection, publication and resume without GPU allocation.
+        with redirect_stdout(StringIO()):
+            generate_dataset(cfg)
+        report = json.loads((folder / 'dataset.json').read_text(encoding='utf-8'))
+        self.assertTrue(report['smoke'])
+        self.assertEqual(report['selected_ids'], [r['id'] for r in selected])
+        student = {'data': {'reasoning_dir': str(folder), 'reasoning_smoke': True}}
+        with redirect_stdout(StringIO()):
+            rows = load_reasoned_train(student, train, validation)
+            self.assertEqual(rows, load_reasoned_train(student, train, validation))
+        self.assertEqual(len(rows), 100)
+        self.assertEqual({r['id'] for r in rows}, {r['id'] for r in selected})
+        self.assertEqual(random.getstate(), before)
+        student['data']['reasoning_smoke'] = False
+        with self.assertRaisesRegex(ValueError, 'smoke'):
+            load_reasoned_train(student, train, validation)
+
+    def test_student_smoke_limits_training_only_and_preserves_full_validation(self):
+        ns, commands, copies = self.experiment('06_sft_reasoning_colab', smoke=True)
+        ns['reasoning_dir'] = self.project / 'data/reasoning/cultural_teacher01-smoke100'
+        exec(find_cell('06_sft_reasoning_colab', 'SFT_OVERRIDES ='), ns)
+        args = dict(value.split('=', 1) for index, value in enumerate(commands[0]) if commands[0][index - 1] == '--set')
+        self.assertEqual(args['data.reasoning_smoke'], 'true')
+        self.assertEqual(args['data.limit'], 'null')
+        self.assertNotIn('training.eval_strategy', args)
+        self.assertNotIn('training.load_best_model_at_end', args)
+        self.assertNotIn('training.max_steps', args)  # not the old one-step/8-row recipe
+        self.assertTrue(args['training.output_dir'].endswith('sft-smoke"'))
+        self.assertTrue(any(dest.endswith('/sft-smoke') for _, dest in copies))
+        count = len(commands)
+        ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+        with redirect_stdout(StringIO()):
+            exec(find_cell('06_sft_reasoning_colab', 'VAL_LIMIT ='), ns)
+        self.assertEqual(len(commands), count + 1)
+        self.assertEqual(commands[-1][2], 'mmcultureqa.evaluate')
+        self.assertNotIn('--limit', commands[-1])
+        self.assertEqual(commands[-1][-2:], ['--backend', 'vllm'])
+        source = find_cell('05_teacher_reasoning_colab', 'TEACHER_LIMIT =')
+        self.assertIn('TEACHER_LIMIT = 100 if SMOKE else None', source)
+        self.assertIn("('-smoke100' if SMOKE else '')", source)
 
 
 if __name__ == '__main__':
