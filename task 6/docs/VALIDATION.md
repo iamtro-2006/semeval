@@ -1,5 +1,13 @@
 # Local CPU validation
 
+## vLLM final generation and teacher/student reasoning
+
+- Notebooks 02/04/06 use vLLM with the complete merged BF16 model for final generation. Teacher-forced in-training SFT evaluation remains unchanged. Notebook 03 remains byte-for-byte unchanged.
+- Notebook 05 uses the official prequantized Qwen3-VL-8B-Thinking-FP8 checkpoint through native vLLM. The Hub revision is resolved once and stored for resume; no student model is allocated in this process.
+- Mock end-to-end teacher tests verify train-only requests, gold conditioning, retries, rejection, immutable revision reuse, recovery of an interrupted final journal line, and no second GPU-engine load when generation is already complete.
+- Student tests verify dataset completeness/smoke/hash/source isolation/coverage guards, reasoning + gold target with no gold in the user input, and answer-only held-out loss targets. Inference tests restore the saved reasoning contract, use the vLLM path, extract only the final answer and preserve raw traces separately.
+- All notebook cells compile. Existing path/import/export/LoRA/GRPO regressions continue to pass. These CPU checks do not execute actual FP8 kernels, vLLM initialization, GPU generation/backward, Colab transfers, or prove synthetic reasoning quality or an accuracy improvement.
+
 ## Experiment03 SFT + merged BF16 artifacts
 
 - SFT defaults: 2 epochs, peak LR 1e-4, microbatch 8 / accumulation 1, eval/save every 225 steps, teacher-forced loss/token accuracy on the FULL 1,000-row validation set. No periodic generation or mmBERT; best selected by lowest val loss. GRPO keeps an explicit 256-row monitor limit to preserve its paused recipe.

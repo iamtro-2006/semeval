@@ -8,7 +8,7 @@ model:
   local_files_only: true
   merged_model: true
 inference:
-  backend: transformers
+  backend: vllm
   split: devtest
   batch_size: 8
   max_new_tokens: 256

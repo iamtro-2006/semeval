@@ -17,19 +17,23 @@ def upload_filters(kind):
             '+ /learning_curves.png',
         ]
         for folder in ('validation', 'validation_subset_*'):
-            for filename in ('scores.json', 'evaluation.json', 'predictions.jsonl'):
+            for filename in ('scores.json', 'evaluation.json', 'predictions.jsonl', 'predictions.traces.jsonl'):
                 rules.append(f'+ /{folder}/{filename}')
     elif kind == 'predictions':
         rules = []
         for stage in ('sft', 'grpo'):
             for split in ('devtest', 'test'):
                 name = f'{stage}_{split}'
-                rules.extend((f'+ /{name}.jsonl', f'+ /{name}/run.json', f'+ /{name}_scores.json'))
+                rules.extend((f'+ /{name}.jsonl', f'+ /{name}/run.json', f'+ /{name}_scores.json',
+                              f'+ /{name}.traces.jsonl'))
     elif kind == 'data':
         # JSONL and Parquet contain the same examples; preparation only reads JSONL.
         rules = ['+ /REVISION']
         for split in ('train', 'dev', 'devtest'):
             rules.extend((f'+ /qa/mena/{split}_en.jsonl', f'+ /archives/images_mena_{split}.zip'))
+    elif kind == 'reasoning':
+        rules = [f'+ /{name}' for name in ('train_reasoning.jsonl', 'dataset.json', 'generation.json',
+                                          'attempts.jsonl', 'rejected.jsonl', 'audit_sample.jsonl')]
     else:
         raise ValueError(f'Unknown upload kind: {kind}')
     rules.append('- **')

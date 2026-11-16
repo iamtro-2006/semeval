@@ -40,6 +40,8 @@ def configure_merged_model(cfg, folder, load_in_4bit=False):
                         load_in_4bit=load_in_4bit, local_files_only=True, merged_model=True)
     cfg['prompt_file'] = str(folder / 'prompt.txt')
     cfg['system_prompt'] = saved.get('system_prompt')
+    # A distilled model must retain its output contract when notebook 04 reloads it.
+    cfg['reasoning'] = saved.get('reasoning', {'enabled': False})
     # Use the same image preprocessing as the training run.
     for key in ('min_pixels', 'max_pixels'):
         cfg['model'][key] = saved['model'][key]

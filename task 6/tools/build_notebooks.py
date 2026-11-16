@@ -283,6 +283,8 @@ def experiment03_profile(cells, inference=False):
         source = ''.join(cell['source'])
         if cell['cell_type'] == 'code':
             source = source.replace("RUN_NAME = 'experiment01'", "RUN_NAME = 'experiment03'", 1)
+            source = source.replace('INSTALL_VLLM = False  # enable only for optional BF16/vLLM inference',
+                                    'INSTALL_VLLM = True  # final generation uses vLLM after training exits')
             source = source.replace('PREDICT_WITH_GENERATE = True', 'PREDICT_WITH_GENERATE = False', 1)
             source = source.replace("upload_filters('run')", "upload_filters('merged_run')")
             if inference:
@@ -296,7 +298,7 @@ SFT trains with NF4 QLoRA, BF16 compute, batch 8 and accumulation 1.
 Periodic monitoring uses teacher-forced val loss/token accuracy, without generation or mmBERT.
 Default 2 epochs, peak learning rate 1e-4 (3% warmup), eval/save every 225 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
-Final validation and test inference use that complete BF16 model via Transformers.
+Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
 Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchanged and deferred.
 ''')
@@ -418,7 +420,7 @@ result.check_returncode()
         result[0] = md(''.join(result[0]['source']).replace('saved final adapter', 'complete BF16 best_model'))
         result[1] = code(''.join(result[1]['source']).replace(
             "cmd += ['--backend', 'transformers' if USE_4BIT else 'vllm']",
-            "cmd += ['--backend', 'transformers']"))
+            "cmd += ['--backend', 'vllm']"))
     return result
 
 def learning_curves(run_variable, stage_variable, label):
@@ -447,6 +449,9 @@ inference_notebook = experiment03_profile(gpu_setup, inference=True) + [md('''##
 Download only experiment03's best_model from Drive. No original Qwen/adapter download is needed.
 Model and processor loading are local-files-only; missing files raise an error instead of falling back to the Hub.
 Uses the saved prompt and preprocessing from the exported training run.
+For notebook 06's student, set RUN_NAME and INPUT_RUN_NAME to experiment04_reasoning.
+The saved reasoning format is restored automatically; predictions contain only the final answer.
+Raw student reasoning is saved separately as *.traces.jsonl for inspection.
 Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
 '''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03
@@ -467,7 +472,7 @@ overrides = {'model.name': str(local_model), 'model.revision': None, 'model.adap
              'model.adapter_revision': None, 'model.processor': str(local_model),
              'model.processor_revision': None, 'model.local_files_only': True, 'model.merged_model': True,
              'model.dtype': 'bfloat16', 'model.load_in_4bit': False,
-             'inference.backend': 'transformers', 'inference.split': SPLIT,
+             'inference.backend': 'vllm', 'inference.split': SPLIT,
              'inference.output': str(prediction_file), 'data.limit': TEST_LIMIT}
 run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
 if not prediction_file.is_file():
@@ -488,11 +493,97 @@ else:
     print(f'{SPLIT} has no public answers. Predictions saved for submission; no local score available.')
 ''')]
 
+teacher_notebook = experiment03_profile(gpu_setup[:-2]) + [md('''## Generate cultural reasoning · teacher only
+Official Qwen/Qwen3-VL-8B-Thinking-FP8, prequantized by Qwen; vLLM loads one teacher.
+Use L4/Ada, Hopper or newer for this block-FP8 recipe. No student is loaded here.
+ALL prepared TRAIN rows are attempted. Validation/test labels never enter teacher requests.
+Teacher observes the image and knows the reference answer. It thinks, then writes 3–6 concise,
+evidence-grounded solution steps; those steps become the student's <think> target.
+Raw native teacher thinking stays in the audit journal; it is not blindly copied into the student.
+Unsupported, malformed and truncated outputs retry, then go to rejected.jsonl.
+These are synthetic, answer-conditioned solutions, not automatically verified cultural facts.
+Inspect audit_sample.jsonl and rejected.jsonl before investing in student training.
+'''), code('''import json
+from mmcultureqa.storage import upload_filters
+TEACHER_RUN_NAME = 'cultural_teacher01'
+RESUME_FROM_DRIVE = False  # True only if this teacher run already exists on Drive
+TEACHER_LIMIT = None  # all train rows; use a DIFFERENT run name for a smoke subset
+TEACHER_OVERRIDES = {}  # e.g. {'teacher.batch_size': 4, 'teacher.max_num_seqs': 2} if memory is tight
+if not re.fullmatch(r'[A-Za-z0-9_-]+', TEACHER_RUN_NAME):
+    raise ValueError('Choose a valid teacher run name')
+teacher_dir = PROJECT_ROOT / 'outputs/reasoning' / TEACHER_RUN_NAME
+teacher_cloud = f'task6-data/reasoning/{TEACHER_RUN_NAME}'
+if RESUME_FROM_DRIVE:
+    copy(cloud(teacher_cloud), teacher_dir, *upload_filters('reasoning'))
+teacher_args = {'teacher.output_dir': str(teacher_dir), 'teacher.limit': TEACHER_LIMIT, **TEACHER_OVERRIDES}
+cmd = [sys.executable, '-m', 'mmcultureqa.data.teacher_reasoning',
+       '--config', str(PROJECT_ROOT / 'configs/teacher_reasoning.yaml')]
+for key, value in teacher_args.items():
+    cmd += ['--set', f'{key}={json.dumps(value)}']
+result = stream_run(cmd, check=False)
+# Preserve the resumable journal even when the child exits with an error.
+if teacher_dir.is_dir():
+    copy(teacher_dir, cloud(teacher_cloud), *upload_filters('reasoning'))
+result.check_returncode()
+report = json.loads((teacher_dir / 'dataset.json').read_text(encoding='utf-8'))
+print('Teacher data on Drive:', cloud(teacher_cloud))
+print('Accepted:', report['accepted'], 'Rejected:', report['rejected'])
+'''), code('''from mmcultureqa.common import read_jsonl
+examples = read_jsonl(teacher_dir / 'audit_sample.jsonl')
+for example in examples[:5]:
+    print('ID:', example['id'], '\\nImage:', example['image'])
+    print('Question:', example['question'])
+    print(example['reasoning'])
+    print('Answer:', example['answer'], '\\n')
+''')]
+
+# Independent student run: keep the baseline SFT notebook and paused GRPO recipe intact.
+reasoning_notebook = []
+for cell in sft_notebook:
+    source = ''.join(cell['source'])
+    source = source.replace('experiment03', 'experiment04_reasoning').replace('Experiment 03', 'Reasoning distillation')
+    if cell['cell_type'] == 'code':
+        source = source.replace("'configs/sft.yaml'", "'configs/sft_reasoning.yaml'")
+        if 'TRAIN_PROJECTOR = False' in source:
+            reasoning_notebook += [md('''## Download the completed teacher dataset
+Train a fresh Qwen3-VL-4B-Instruct adapter with <think>steps</think><answer>gold</answer>.
+The student prompt contains only image + question. Gold answers are supervision, never input.
+Default microbatch 2 × accumulation 4 keeps effective batch 8 as reasoning increases sequence length.
+Teacher data must cover at least 95% of train, with matching source splits and no smoke flag.
+Rejected teacher rows are excluded. Inspect the audit sample from notebook 05 first.
+Periodic full validation uses only held-out gold answers, with no synthetic validation rationale;
+its teacher-forced loss is a proxy and does not evaluate reasoning quality.
+Final vLLM evaluation generates reasoning, extracts only <answer>, then applies the usual scorer.
+'''), code('''TEACHER_RUN_NAME = 'cultural_teacher01'
+if not re.fullmatch(r'[A-Za-z0-9_-]+', TEACHER_RUN_NAME):
+    raise ValueError('Choose a valid teacher run name')
+from mmcultureqa.common import read_jsonl
+from mmcultureqa.data.distillation import load_reasoned_train
+from mmcultureqa.storage import upload_filters
+reasoning_dir = PROJECT_ROOT / 'data/reasoning' / TEACHER_RUN_NAME
+# Only the finished dataset and its provenance are needed to train the student.
+copy(cloud(f'task6-data/reasoning/{TEACHER_RUN_NAME}'), reasoning_dir,
+     '--include', '/train_reasoning.jsonl', '--include', '/dataset.json', '--include', '/generation.json', '--exclude', '**')
+check_cfg = {'data': {'reasoning_dir': str(reasoning_dir), 'reasoning_min_coverage': 0.95}}
+load_reasoned_train(check_cfg, read_jsonl(PROJECT_ROOT / 'data/prepared/train.jsonl'),
+                    read_jsonl(PROJECT_ROOT / 'data/prepared/validation.jsonl'))
+''')]
+            source = source.replace('SFT_OVERRIDES = {}', "SFT_OVERRIDES = {'data.reasoning_dir': str(reasoning_dir)}")
+        reasoning_notebook.append(code(source))
+    else:
+        source = source.replace('train batch 8 x accumulation 1', 'train batch 2 x accumulation 4')
+        source = source.replace('batch 8 and accumulation 1', 'batch 2 and accumulation 4')
+        source = source.replace('Periodic validation: batch 8', 'Periodic validation: batch 4')
+        reasoning_notebook.append(md(source))
+
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
-                    ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook)]:
+                    ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook),
+                    ('05_teacher_reasoning_colab', teacher_notebook), ('06_sft_reasoning_colab', reasoning_notebook)]:
     titles = {'01_hf_to_drive_rclone': '# Task 6 · Hugging Face → Drive',
               '02_sft_colab': '# Task 6 · SFT only', '03_grpo_colab': '# Task 6 · GRPO only',
-              '04_inference_colab': '# Task 6 · Inference and scoring only'}
+              '04_inference_colab': '# Task 6 · Inference and scoring only',
+              '05_teacher_reasoning_colab': '# Task 6 · Teacher cultural reasoning',
+              '06_sft_reasoning_colab': '# Task 6 · Reasoning SFT · Qwen3-VL-4B'}
     cells = [md(''.join(cells[0]['source']).replace('# Task 6 · English QA', titles[name], 1))] + cells[1:]
     target = ROOT / 'notebooks' / f'{name}.ipynb'
     target.parent.mkdir(parents=True, exist_ok=True)

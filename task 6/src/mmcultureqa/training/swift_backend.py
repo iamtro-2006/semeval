@@ -36,7 +36,12 @@ def export_dataset(cfg, rows, destination, stage):
         msg = messages(cfg, row['question'])
         msg[-1]['content'] = '<image>\n' + msg[-1]['content'][-1]['text']
         if stage == 'sft':
-            msg.append({'role': 'assistant', 'content': row['answer']})
+            if cfg.get('reasoning', {}).get('enabled'):
+                from ..data.distillation import assistant_target
+                target = assistant_target(row)
+            else:
+                target = row['answer']
+            msg.append({'role': 'assistant', 'content': target})
         record = {'messages': msg, 'images': [str(path(row['image']))]}
         if stage == 'grpo':
             record.update(solution=row['answer'], id=row['id'])
@@ -50,6 +55,14 @@ def build_arguments(cfg, stage):
     data = out / 'swift_data'
     train = rows_for(cfg, cfg['data']['train_split'])
     validation = read_jsonl(path(cfg['data']['manifest_dir']) / f'{cfg["data"]["eval_split"]}.jsonl')
+    if cfg.get('reasoning', {}).get('enabled'):
+        if stage != 'sft' or tc.get('predict_with_generate'):
+            raise ValueError('Reasoning distillation uses SFT with teacher-forced monitoring; final generation runs separately')
+        from ..data.distillation import load_reasoned_train
+        full_train = read_jsonl(path(cfg['data']['manifest_dir']) / f'{cfg["data"]["train_split"]}.jsonl')
+        train = load_reasoned_train(cfg, full_train, validation)
+        if cfg['data'].get('limit'):
+            train = train[:cfg['data']['limit']]
     if {r['id'] for r in train} & {r['id'] for r in validation}:
         raise ValueError('Train/validation IDs overlap')
     if {r['image'] for r in train} & {r['image'] for r in validation}:

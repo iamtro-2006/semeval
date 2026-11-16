@@ -1,6 +1,6 @@
-# Task 6 · MMCultureQA · experiment03
+# Task 6 · MMCultureQA · SFT và reasoning distillation
 
-Pipeline hiện tại ưu tiên SFT trên Qwen3-VL-4B-Instruct. Train bằng QLoRA 4-bit, chọn checkpoint bằng validation loss, sau đó xuất **một model BF16 hoàn chỉnh** để đánh giá và inference. Notebook GRPO tạm giữ nguyên recipe và tên run cũ; không chạy tự động trong experiment03.
+Pipeline dùng Qwen3-VL-4B-Instruct: train QLoRA 4-bit, chọn checkpoint bằng validation loss, xuất **một model BF16 hoàn chỉnh**, rồi sinh đánh giá cuối/inference bằng **vLLM** sau khi tiến trình training đã thoát. Có hai hướng độc lập: SFT đáp án `experiment03` và SFT reasoning từ teacher `experiment04_reasoning`. Notebook GRPO giữ nguyên recipe và tên run cũ.
 
 ## Cấu hình SFT
 
@@ -27,7 +27,11 @@ Pipeline hiện tại ưu tiên SFT trên Qwen3-VL-4B-Instruct. Train bằng QLo
 1. `01_hf_to_drive_rclone.ipynb`: chuẩn bị một bản dữ liệu dùng chung trên Drive (JSONL, ZIP ảnh, REVISION).
 2. `02_sft_colab.ipynb`: train NF4, chọn best adapter local bằng val loss, kết thúc subprocess training, reload base BF16 rồi merge vào `best_model/`, upload model hoàn chỉnh; vẽ learning curves và chấm full validation một lần ở cuối.
 3. `03_grpo_colab.ipynb`: recipe GRPO cũ, **giữ nguyên notebook**. Chưa chuyển sang giao diện model merged của experiment03.
-4. `04_inference_colab.ipynb`: tải `experiment03/sft/best_model` từ Drive, load local BF16 bằng Transformers, sinh predictions devtest/test. Không tự tải lại Qwen gốc hay adapter riêng. Không yêu cầu adapter GRPO.
+4. `04_inference_colab.ipynb`: tải `best_model` từ Drive, load local BF16 bằng vLLM, sinh predictions devtest/test. Mặc định `experiment03`; để chạy student mới, đặt `RUN_NAME` và `INPUT_RUN_NAME` thành `experiment04_reasoning`. Tự phục hồi prompt/định dạng reasoning từ artifact, chỉ lấy đáp án cuối để chấm/nộp.
+5. `05_teacher_reasoning_colab.ipynb`: dùng Qwen3-VL-8B-Thinking-FP8 chính thức qua vLLM, nhìn ảnh + câu hỏi + đáp án chuẩn, tạo các bước suy luận văn hóa cho **9.000 mẫu train**, upload dữ liệu lên Drive. Không train student ở đây.
+6. `06_sft_reasoning_colab.ipynb`: tải dữ liệu teacher hoàn chỉnh, kiểm tra hash/split/coverage, SFT Qwen3-VL-4B-Instruct với reasoning và đáp án; merge best BF16 và chấm full validation bằng vLLM. Run riêng `experiment04_reasoning`.
+
+Nếu chạy hướng reasoning, thứ tự là **01 (nếu chưa có dữ liệu) → 05 → 06 → 04**. Notebook 02 là baseline riêng, không phải điều kiện để chạy 06. Chi tiết prompt, cấu hình và đường dẫn Drive: [docs/REASONING.md](docs/REASONING.md).
 
 Mở notebook bản mới, restart runtime nếu vừa đổi dependency nhị phân và chạy từ đầu. Không sửa cấu hình để áp dụng vào một tiến trình training đang chạy: thay đổi chỉ có hiệu lực ở lượt chạy tiếp theo.
 
@@ -138,7 +142,7 @@ Best được chọn theo loss của model NF4 trên tập monitor. Chuyển san
 Python 3.11+; GPU hỗ trợ BF16 cho training và inference mặc định. Không đổi dependency organizer chồng lên môi trường GPU.
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-vllm.txt
 pip install --no-deps -e .
 python -m mmcultureqa.data.prepare download
 python -m mmcultureqa.data.prepare prepare
@@ -156,7 +160,7 @@ python tools/build_notebooks.py
 python -m unittest discover -s "task 6/tests" -v
 ```
 
-vLLM là backend tùy chọn riêng qua `requirements-vllm.txt`; experiment03 không dùng. ms-swift vẫn cần `msgspec` cho import GRPO utilities nên dependency được khai báo trực tiếp. Preflight kiểm tra concrete trainer imports trước khi load model.
+Notebook 02/04/05/06 cài `requirements-vllm.txt` mặc định. Generation cuối/inference chạy vLLM; validation định kỳ của SFT vẫn teacher forcing. Notebook 03 giữ backend Transformers và recipe cũ. ms-swift vẫn cần `msgspec` cho import GRPO utilities nên dependency được khai báo trực tiếp. Preflight kiểm tra concrete trainer imports trước khi load model.
 
 Các kiểm tra CPU dùng fixture/mock để xác minh cấu hình, đường dẫn Colab, random subset, projector regex, lựa chọn adapter merge, tải model local-only, upload allowlist và quy trình BF16 evaluation. Chúng **không chứng minh** GPU merge/generation/backward thực tế chạy đúng, batch 8 vừa VRAM hay tốc độ đạt mục tiêu. Xem `docs/VALIDATION.md`.
 

@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -187,7 +189,7 @@ print(ROOT)
         self.assertEqual(len(uploads), 1)
         self.assertTrue(all(source == str(predictions) for source, dest in uploads))
         self.assertEqual([c[2] for c in commands], ['mmcultureqa.inference.predict'])
-        self.assertIn('inference.backend="transformers"', commands[0])
+        self.assertIn('inference.backend="vllm"', commands[0])
         self.assertIn('model.load_in_4bit=false', commands[0])
         self.assertIn('model.local_files_only=true', commands[0])
         self.assertIn('model.adapter=null', commands[0])
@@ -216,7 +218,9 @@ print(ROOT)
                     'learning_curves.png', 'validation/scores.json', 'validation/evaluation.json',
                     'validation/predictions.jsonl', 'validation_subset_4/scores.json'],
             'predictions': ['sft_devtest.jsonl', 'grpo_devtest.jsonl', 'sft_test.jsonl',
-                            'grpo_test/run.json', 'sft_test_scores.json'],
+                            'grpo_test/run.json', 'sft_test_scores.json', 'sft_devtest.traces.jsonl'],
+            'reasoning': ['train_reasoning.jsonl', 'dataset.json', 'generation.json',
+                          'attempts.jsonl', 'rejected.jsonl', 'audit_sample.jsonl'],
             'data': ['REVISION', 'qa/mena/train_en.jsonl', 'qa/mena/dev_en.jsonl',
                      'qa/mena/devtest_en.jsonl', 'archives/images_mena_train.zip',
                      'archives/images_mena_dev.zip', 'archives/images_mena_devtest.zip'],
@@ -230,13 +234,15 @@ print(ROOT)
                     'some_new_directory/large_file.bin'],
             'predictions': ['devtest_gold_en.jsonl', 'sft_devtest.signature',
                             'some_new_file.jsonl', 'some_new_directory/cache.bin'],
+            'reasoning': ['teacher_weights/model.safetensors', 'images/example.jpg', 'cache.bin'],
             'data': ['qa/mena/train_en.parquet', 'README.md', '.cache/huggingface/download/metadata',
                      'train/images/example.jpg', 'qa/mena/train_arz.jsonl', 'archives/audio.zip'],
         }
         keep['merged_run'] = ['best_model/model.safetensors', 'best_model/config.json',
                               'best_model/tokenizer.json', 'best_model/merge.json',
                               'best_model/prompt.txt', 'best_model/run_config.json', 'selection.json',
-                              'run.json', 'logging.jsonl', 'learning_curves.png', 'validation/scores.json']
+                              'run.json', 'logging.jsonl', 'learning_curves.png', 'validation/scores.json',
+                              'validation/predictions.traces.jsonl']
         drop['merged_run'] = ['final/adapter_model.safetensors', 'final/adapter_config.json',
                               'checkpoint-225/adapter_model.safetensors', 'checkpoint-225/optimizer.pt',
                               'swift_data/train.jsonl', '.merge-failed/best_model/model.safetensors',
@@ -300,7 +306,7 @@ print(ROOT)
             install = ast.parse(find_cell(notebook, 'INSTALL_VLLM ='))
             assignment = next(node for node in install.body if isinstance(node, ast.Assign)
                               and any(isinstance(t, ast.Name) and t.id == 'INSTALL_VLLM' for t in node.targets))
-            self.assertIs(assignment.value.value, False)
+            self.assertIs(assignment.value.value, notebook != '03_grpo_colab')
 
     def grpo_config(self):
         sys.path.insert(0, str(self.project / 'src'))
@@ -604,10 +610,208 @@ print(ROOT)
         with patch.object(sys, 'argv', ['evaluate', '--run-dir', str(run)]), patch('subprocess.run', side_effect=child):
             evaluate.main()
         self.assertFalse(inferred[1]['model']['load_in_4bit'])
+        self.assertEqual(inferred[1]['inference']['backend'], 'vllm')
         self.assertIsNone(inferred[1]['model']['adapter'])
         self.assertTrue(inferred[1]['model']['local_files_only'])
         report = json.loads((run / 'validation/evaluation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['model_artifact'], 'merged_bf16')
+
+    def test_teacher_generation_retries_resumes_and_never_prompts_validation(self):
+        self.grpo_config()
+        from mmcultureqa.common import config, read_jsonl, write_jsonl
+        from mmcultureqa.data.teacher_reasoning import generate_dataset
+        from mmcultureqa.data.distillation import load_reasoned_train
+        with patch.object(sys, 'argv', ['teacher', '--config', str(self.project / 'configs/teacher_reasoning.yaml')]):
+            cfg = config()
+        train = read_jsonl(self.project / 'data/prepared/train.jsonl')
+        train.append(dict(id='train-2', image='second.jpg', question='Second?', answer='second-gold'))
+        write_jsonl(self.project / 'data/prepared/train.jsonl', train)
+        validation = read_jsonl(self.project / 'data/prepared/validation.jsonl')
+        prompts, calls = [], []
+        good = 'Native thinking</think>' + json.dumps({'supported': True, 'steps': [
+            'Locate the visible object at the image centre.',
+            'Connect its visible form with relevant cultural knowledge.',
+            'Use those observations to answer the question.'], 'issue': ''})
+
+        def generate(requests, params, **kwargs):
+            calls.append(requests)
+            if len(calls) == 1:
+                texts = [('Native thinking</think>{"supported":false,"issue":"unclear image"}', 'stop'),
+                         ('Unfinished reasoning', 'length')]
+            else:
+                texts = [(good, 'stop'), ('Unfinished reasoning again', 'length')]
+            return [SimpleNamespace(outputs=[SimpleNamespace(text=t, finish_reason=f)]) for t, f in texts]
+
+        def template(messages, **kwargs):
+            prompts.append(messages)
+            return 'formatted image prompt'
+
+        factory = MagicMock(return_value=SimpleNamespace(generate=generate))
+        hub = MagicMock(return_value=SimpleNamespace(model_info=lambda *a, **k: SimpleNamespace(sha='pinned-commit')))
+        modules = {'torch': SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True,
+                        is_bf16_supported=lambda: True, get_device_capability=lambda: (8, 9))),
+                   'huggingface_hub': SimpleNamespace(HfApi=hub),
+                   'transformers': SimpleNamespace(AutoProcessor=SimpleNamespace(from_pretrained=MagicMock(
+                        return_value=SimpleNamespace(apply_chat_template=template)))),
+                   'vllm': SimpleNamespace(LLM=factory, SamplingParams=lambda **k: k)}
+        with patch.dict(sys.modules, modules), patch('mmcultureqa.data.teacher_reasoning.image', return_value='PIL'), redirect_stdout(StringIO()):
+            generate_dataset(cfg)
+            # Simulate a torn final append from an interrupted process.
+            folder = self.project / cfg['teacher']['output_dir']
+            with (folder / 'attempts.jsonl').open('ab') as handle:
+                handle.write(b'{"partial":')
+            generate_dataset(cfg)
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(hub.call_count, 1)
+        self.assertEqual(factory.call_args.kwargs['revision'], 'pinned-commit')
+        self.assertNotIn('quantization', factory.call_args.kwargs)  # use checkpoint's prequantized weights
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(prompts), 4)
+        for messages in prompts:
+            text = messages[-1]['content'][-1]['text']
+            self.assertNotIn('val-gold', text)
+            self.assertNotIn('Val?', text)
+            self.assertTrue('train-gold' in text or 'second-gold' in text)
+        accepted = read_jsonl(folder / 'train_reasoning.jsonl')
+        self.assertEqual([r['id'] for r in accepted], ['train-1'])
+        self.assertTrue(accepted[0]['reasoning'].startswith('1. Locate'))
+        report = json.loads((folder / 'dataset.json').read_text(encoding='utf-8'))
+        self.assertTrue(report['complete'])
+        self.assertEqual(report['rejected'], 1)
+        student = {'data': {'reasoning_dir': str(folder)}}
+        with self.assertRaisesRegex(ValueError, 'coverage'):
+            load_reasoned_train(student, train, validation)
+        student['data']['reasoning_min_coverage'] = 0.5
+        with redirect_stdout(StringIO()):
+            joined = load_reasoned_train(student, train, validation)
+        self.assertEqual(joined, accepted)
+        with self.assertRaisesRegex(ValueError, 'split mismatch'):
+            load_reasoned_train(student, train, [])
+        cfg['system_prompt'] += ' changed'
+        with self.assertRaisesRegex(ValueError, 'Resume teacher/prompt/data mismatch'):
+            generate_dataset(cfg)
+
+    def test_distilled_sft_has_no_gold_input_and_rejects_mixed_or_smoke_data(self):
+        self.grpo_config()
+        from mmcultureqa.common import config, read_jsonl, write_jsonl
+        from mmcultureqa.data.distillation import digest, load_reasoned_train
+        from mmcultureqa.training.swift_backend import build_arguments
+        with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft_reasoning.yaml')]):
+            cfg = config()
+        train = read_jsonl(self.project / 'data/prepared/train.jsonl')
+        validation = read_jsonl(self.project / 'data/prepared/validation.jsonl')
+        directory = self.project / cfg['data']['reasoning_dir']
+        accepted = [{**train[0], 'reasoning': '1. Observe the object.\n2. Apply cultural knowledge.\n3. Derive the answer.'}]
+        write_jsonl(directory / 'train_reasoning.jsonl', accepted)
+        report = dict(schema_version=1, complete=True, smoke=False, accepted=1,
+                      source_train_hash=digest(train), source_validation_hash=digest(validation), accepted_hash=digest(accepted))
+        (directory / 'dataset.json').write_text(json.dumps(report), encoding='utf-8')
+        with redirect_stdout(StringIO()):
+            args = build_arguments(cfg, 'sft')
+        self.assertEqual(args['per_device_train_batch_size'], 2)
+        self.assertEqual(args['gradient_accumulation_steps'], 4)
+        self.assertEqual(args['quant_bits'], 4)
+        self.assertEqual(args['loss_scale'], 'default')
+        records = read_jsonl(args['dataset'][0])
+        self.assertNotIn('train-gold', records[0]['messages'][-2]['content'])
+        self.assertIn('<think>\n1. Observe', records[0]['messages'][-1]['content'])
+        self.assertTrue(records[0]['messages'][-1]['content'].endswith('<answer>train-gold</answer>'))
+        val = read_jsonl(args['val_dataset'][0])
+        self.assertEqual(val[0]['messages'][-1]['content'], '<answer>val-gold</answer>')
+        report['smoke'] = True
+        (directory / 'dataset.json').write_text(json.dumps(report), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'smoke'):
+            load_reasoned_train(cfg, train, validation)
+        report['smoke'] = False
+        accepted[0]['id'] = 'val-1'
+        report['accepted_hash'] = digest(accepted)
+        write_jsonl(directory / 'train_reasoning.jsonl', accepted)
+        (directory / 'dataset.json').write_text(json.dumps(report), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'non-training'):
+            load_reasoned_train(cfg, train, validation)
+
+    def test_reasoning_inference_restores_contract_and_scores_only_final_answer(self):
+        self.grpo_config()
+        from mmcultureqa.common import write_jsonl, read_jsonl
+        from mmcultureqa.inference import predict
+        model = self.project / 'outputs/student/best_model'
+        merged_fixture(model)
+        saved = json.loads((model / 'run_config.json').read_text(encoding='utf-8'))
+        saved['reasoning'] = {'enabled': True, 'max_new_tokens': 1024, 'vllm_max_model_len': 4096}
+        (model / 'run_config.json').write_text(json.dumps(saved), encoding='utf-8')
+        write_jsonl(self.project / 'data/prepared/devtest.jsonl', [dict(id='test-1', image='test.jpg', question='Test?')])
+        observed = []
+
+        def engine(cfg):
+            observed.append(cfg)
+            return lambda rows: ['<think>1. Visible evidence.\n2. Cultural context.</think>\n<answer>Final only</answer>']
+
+        argv = ['predict', '--config', str(self.project / 'configs/inference.yaml'), '--set', f'model.name={json.dumps(str(model))}']
+        with patch.dict(sys.modules, {'torch': SimpleNamespace(), 'transformers': SimpleNamespace(set_seed=lambda s: None)}), \
+                patch.object(sys, 'argv', argv), patch('mmcultureqa.models.vllm_loading.load_vllm', side_effect=engine), \
+                patch('mmcultureqa.models.loading.load', side_effect=AssertionError('Unexpected Transformers model')), \
+                patch('mmcultureqa.inference.predict.provenance'), redirect_stdout(StringIO()):
+            predict.main()
+            predict.main()  # complete output resumes without loading the engine again
+        self.assertEqual(len(observed), 1)
+        cfg = observed[0]
+        self.assertEqual(cfg['inference']['max_new_tokens'], 1024)
+        self.assertEqual(cfg['inference']['vllm_max_model_len'], 4096)
+        self.assertEqual(read_jsonl(cfg['inference']['output']), [{'id': 'test-1', 'answer': 'Final only'}])
+        self.assertIn('Visible evidence', read_jsonl(Path(cfg['inference']['output']).with_suffix('.traces.jsonl'))[0]['generation'])
+
+    def test_reasoning_parsers_reject_truncation_and_ambiguous_answers(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.data.distillation import parse_teacher, final_answer
+        for text, finish in [('Thinking without closing tag', 'stop'), ('</think>{}', 'length'),
+                             ('</think>{"supported":false}', 'stop'), ('</think>{"supported":true,"steps":[]}', 'stop')]:
+            with self.assertRaises(ValueError):
+                parse_teacher(text, finish)
+        for text in ['Plain answer', '<think>unfinished <answer>guess</answer>',
+                     '<think>steps</think><answer>a</answer><answer>b</answer>',
+                     '<think>steps</think><answer></answer>']:
+            with self.assertRaises(ValueError):
+                final_answer(text)
+
+    def test_active_sft_notebooks_generate_final_validation_with_vllm(self):
+        for notebook in ('02_sft_colab', '06_sft_reasoning_colab'):
+            ns, commands, _ = self.experiment(notebook)
+            ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+            exec(find_cell(notebook, 'VAL_LIMIT ='), ns)
+            self.assertEqual(commands[0][-2:], ['--backend', 'vllm'])
+        self.assertEqual(ns['RUN_NAME'], 'experiment04_reasoning')
+        self.assertIn('INSTALL_VLLM = True', find_cell('05_teacher_reasoning_colab', 'INSTALL_VLLM ='))
+
+    def test_reasoning_notebook_download_and_training_pass_the_same_absolute_dataset(self):
+        ns, commands, copies = self.experiment('06_sft_reasoning_colab')
+        from mmcultureqa.common import write_jsonl
+        from mmcultureqa.data.distillation import digest
+        train = [dict(id='t1', question='Observe?', answer='Gold', image='train.jpg')]
+        validation = [dict(id='v1', question='Held-out?', answer='Other', image='val.jpg')]
+        write_jsonl(self.project / 'data/prepared/train.jsonl', train)
+        write_jsonl(self.project / 'data/prepared/validation.jsonl', validation)
+        real_copy = ns['copy']
+
+        def download(source, destination, *args):
+            if str(source).startswith('remote:task6-data/reasoning/'):
+                directory = Path(destination)
+                rows = [{**train[0], 'reasoning': '1. Observe.\n2. Relate.\n3. Answer.'}]
+                write_jsonl(directory / 'train_reasoning.jsonl', rows)
+                report = dict(schema_version=1, complete=True, smoke=False, accepted=1,
+                              source_train_hash=digest(train), source_validation_hash=digest(validation), accepted_hash=digest(rows))
+                (directory / 'dataset.json').write_text(json.dumps(report), encoding='utf-8')
+                copies.append((str(source), str(destination)))
+            else:
+                real_copy(source, destination, *args)
+
+        ns['copy'] = download
+        with redirect_stdout(StringIO()):
+            exec(find_cell('06_sft_reasoning_colab', "TEACHER_RUN_NAME ="), ns)
+            exec(find_cell('06_sft_reasoning_colab', 'SFT_OVERRIDES ='), ns)
+        self.assertIn('configs/sft_reasoning.yaml', commands[0][commands[0].index('--config') + 1].replace('\\', '/'))
+        self.assertIn('data.reasoning_dir=' + json.dumps(str(ns['reasoning_dir'])), commands[0])
+        self.assertEqual([c[2] for c in commands], ['mmcultureqa.training.sft', 'mmcultureqa.export'])
+        self.assertTrue(any(dest == 'remote:task6-runs/experiment04_reasoning/sft' for _, dest in copies))
 
 
 if __name__ == '__main__':

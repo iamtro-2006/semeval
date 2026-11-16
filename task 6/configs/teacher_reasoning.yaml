@@ -1,0 +1,18 @@
+extends: configs/sft.yaml
+prompt_file: prompts/teacher_reasoning.txt
+system_prompt: You are a visual reasoning assistant with expertise in cultures worldwide. Ground cultural claims in evidence and distinguish observation from knowledge.
+teacher:
+  name: Qwen/Qwen3-VL-8B-Thinking-FP8
+  revision: main  # resolved to an immutable Hub commit on first run; reused on resume
+  output_dir: outputs/reasoning/cultural_teacher01
+  limit: null  # all TRAIN rows; a non-null limit creates a separate smoke dataset
+  batch_size: 8
+  max_num_seqs: 4
+  max_model_len: 8192
+  max_new_tokens: 4096
+  gpu_memory_utilization: 0.85
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 20
+  attempts: 2
+  seed: 42

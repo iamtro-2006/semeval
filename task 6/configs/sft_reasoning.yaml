@@ -1,0 +1,16 @@
+extends: configs/sft.yaml
+prompt_file: prompts/qa_reasoning.txt
+data:
+  reasoning_dir: data/reasoning/cultural_teacher01
+  reasoning_min_coverage: 0.95
+training:
+  output_dir: outputs/runs/experiment04_reasoning/sft
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4
+  per_device_eval_batch_size: 4
+monitor:
+  max_new_tokens: 1024
+reasoning:
+  enabled: true
+  max_new_tokens: 1024
+  vllm_max_model_len: 4096

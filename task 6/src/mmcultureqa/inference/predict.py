@@ -14,6 +14,10 @@ def main():
         cfg = configure_merged_model(cfg, cfg['model']['name'], cfg['model'].get('load_in_4bit', False))
     set_seed(cfg['training']['seed'])
     ic = cfg['inference']
+    reasoning = cfg.get('reasoning', {})
+    if reasoning.get('enabled'):
+        ic['max_new_tokens'] = max(ic['max_new_tokens'], reasoning.get('max_new_tokens', 1024))
+        ic['vllm_max_model_len'] = max(ic['vllm_max_model_len'], reasoning.get('vllm_max_model_len', 4096))
     rows = rows_for(cfg, ic['split'])
     output = path(ic['output'])
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -64,6 +68,13 @@ def main():
             if len(answers) != len(batch):
                 raise ValueError('Inference backend returned an incorrect number of answers')
             for row, answer in zip(batch, answers):
+                if reasoning.get('enabled'):
+                    # Keep raw generations for diagnostics, but score/submit the final answer only.
+                    trace = output.with_suffix('.traces.jsonl')
+                    with trace.open('a', encoding='utf-8') as traces:
+                        traces.write(json.dumps({'id': row['id'], 'generation': answer}, ensure_ascii=False) + '\n')
+                    from ..data.distillation import final_answer
+                    answer = final_answer(answer)
                 handle.write(json.dumps({'id': row['id'], 'answer': answer}, ensure_ascii=False) + '\n')
             handle.flush()
             print(f'{len(done) + min(offset + len(batch), len(pending))}/{len(rows)}', flush=True)

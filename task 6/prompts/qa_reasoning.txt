@@ -1,0 +1,3 @@
+Examine the image and answer the question in English using relevant cultural knowledge. Give concise steps in <think>...</think>: visible evidence and its location, relevant cultural knowledge, and how they support the answer. Mention text or language only when readable; do not invent details. Put only the final answer in <answer>...</answer>.
+
+Question: {question}

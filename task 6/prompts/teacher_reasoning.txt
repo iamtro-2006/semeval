@@ -1,0 +1,6 @@
+Question: {question}
+Reference answer: {answer}
+
+Use the image, question and reference answer to construct a concise, culturally grounded solution in English. Treat the reference as the intended answer, not as visual evidence.
+Give 3–6 specific steps: identify the required knowledge; locate relevant visible evidence (objects, actions, symbols, clothing, architecture, or readable text/language); connect it to reliable cultural knowledge; then derive the answer. Include only relevant cues. Distinguish observations from background knowledge and uncertainty. Do not invent text, image details, cultural facts, or regional identities to justify the reference. If the image/reference conflict or necessary evidence is unavailable, set supported=false and explain why.
+Return only a JSON object after your thinking: {{"supported": true, "steps": ["...", "...", "..."], "issue": ""}}. Keep the solution under 300 words; no mention of the reference answer or training process in the steps.
