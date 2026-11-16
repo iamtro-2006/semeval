@@ -578,7 +578,8 @@ load_reasoned_train(check_cfg, read_jsonl(PROJECT_ROOT / 'data/prepared/train.js
                     read_jsonl(PROJECT_ROOT / 'data/prepared/validation.jsonl'))
 ''')]
             source = source.replace('SFT_OVERRIDES = {}',
-                "SFT_OVERRIDES = {'data.reasoning_dir': str(reasoning_dir), 'data.reasoning_smoke': not RUN_FULL}")
+                "SFT_OVERRIDES = {'data.reasoning_dir': str(reasoning_dir), 'data.reasoning_smoke': not RUN_FULL,\n"
+                "                 **({'training.save_steps': 8, 'training.eval_steps': 8} if not RUN_FULL else {})}")
             source = source.replace(
                 "sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',\n"
                 "                     'training.load_best_model_at_end': False, 'training.save_steps': 1})",

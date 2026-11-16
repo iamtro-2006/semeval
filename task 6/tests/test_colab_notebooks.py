@@ -866,6 +866,8 @@ print(ROOT)
         args = dict(value.split('=', 1) for index, value in enumerate(commands[0]) if commands[0][index - 1] == '--set')
         self.assertEqual(args['data.reasoning_smoke'], 'true')
         self.assertEqual(args['data.limit'], 'null')
+        self.assertEqual(args['training.save_steps'], '8')
+        self.assertEqual(args['training.eval_steps'], '8')
         self.assertNotIn('training.eval_strategy', args)
         self.assertNotIn('training.load_best_model_at_end', args)
         self.assertNotIn('training.max_steps', args)  # not the old one-step/8-row recipe

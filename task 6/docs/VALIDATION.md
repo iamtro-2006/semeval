@@ -2,7 +2,7 @@
 
 ## vLLM final generation and teacher/student reasoning
 
-- Teacher/student smoke now select up to 100 rows without replacement using a local seed-42 RNG. CPU regressions check exact random IDs, repeatability, unchanged global RNG state, smoke journal publication, rejection by full training and isolated smoke output. Smoke changes only generation/training data size: configured epochs, monitoring, checkpoint selection and full final validation are preserved instead of the old one-step/8-row path.
+- Teacher/student smoke now select up to 100 rows without replacement using a local seed-42 RNG. CPU regressions check exact random IDs, repeatability, unchanged global RNG state, smoke journal publication, rejection by full training and isolated smoke output. Smoke retains configured epochs, checkpoint selection and full final validation; its notebook overrides set save/eval intervals to 8 steps, while full runs retain 225.
 
 - Notebooks 02/04/06 use vLLM with the complete merged BF16 model for final generation. Teacher-forced in-training SFT evaluation remains unchanged. Notebook 03 remains byte-for-byte unchanged.
 - Notebook 05 uses the official prequantized Qwen3-VL-8B-Thinking-FP8 checkpoint through native vLLM. The Hub revision is resolved once and stored for resume; no student model is allocated in this process.
