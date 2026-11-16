@@ -593,6 +593,37 @@ load_reasoned_train(check_cfg, read_jsonl(PROJECT_ROOT / 'data/prepared/train.js
                                 'Default: ALL 1,000 validation examples, including after a 100-row smoke run.')
         reasoning_notebook.append(md(source))
 
+# Add only to the baseline SFT notebook; notebook 06 already trains on reasoning targets.
+sft_notebook += [md('''## Zero-shot CoT validation on the same SFT checkpoint
+After the direct-answer validation above, run the agreed four-step CoT prompt on the SAME held-out rows.
+Uses the same merged BF16 model and vLLM; training and checkpoint selection do not change.
+Only <answer> is scored. Raw reasoning and format errors are saved separately; invalid outputs
+count as unanswered (zero score / lower Coverage), rather than stopping the entire validation.
+Both modes use greedy decoding. CoT has a larger generation budget, shown in the comparison report.
+No in-context demonstrations are included; both evaluations use the already fine-tuned checkpoint.
+'''), code('''COT_MAX_NEW_TOKENS = 1024
+cot_cmd = [sys.executable, '-m', 'mmcultureqa.evaluate', '--run-dir', str(validation_run),
+           '--backend', 'vllm', '--prompt-mode', 'cot', '--cot-max-new-tokens', str(COT_MAX_NEW_TOKENS)]
+if VAL_LIMIT is not None:
+    cot_cmd += ['--limit', str(VAL_LIMIT)]
+cot_result = stream_run(cot_cmd, check=False)
+upload_run(validation_run, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
+cot_result.check_returncode()
+'''), md('''## Validation metrics · direct answer vs CoT
+Compare BERTScore-F1/P/R, BLEU, ROUGE-L and Coverage, with CoT-minus-direct deltas.
+Reports validate that checkpoint and held-out rows match. Save HTML, CSV and JSON to Drive.
+'''), code('''from IPython.display import HTML, display
+from mmcultureqa.common import read_jsonl
+from mmcultureqa.inference.comparison import build_comparison
+
+total_val = len(read_jsonl(PROJECT_ROOT / 'data/prepared/validation.jsonl'))
+baseline_name = 'validation' if VAL_LIMIT is None or VAL_LIMIT >= total_val else f'validation_subset_{VAL_LIMIT}'
+comparison_file = build_comparison(validation_run, baseline_name)
+display(HTML(comparison_file.read_text(encoding='utf-8')))
+upload_run(validation_run, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
+print('Saved comparison: prompt_comparison.html / .csv / .json')
+''')]
+
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
                     ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook),
                     ('05_teacher_reasoning_colab', teacher_notebook), ('06_sft_reasoning_colab', reasoning_notebook)]:

@@ -26,6 +26,13 @@ def main():
             scorer._model.to(dtype=getattr(torch, args.dtype))
             scorer._model.eval()
             scorer._mmcqa_precision_applied = True
+            original_score = scorer.score
+
+            def score_with_progress(*score_args, **score_kwargs):
+                score_kwargs['verbose'] = True
+                return original_score(*score_args, **score_kwargs)
+
+            scorer.score = score_with_progress
         return scorer
 
     organizer.backbone.get_scorer = scorer_with_dtype

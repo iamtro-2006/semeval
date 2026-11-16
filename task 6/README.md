@@ -25,7 +25,7 @@ Pipeline dùng Qwen3-VL-4B-Instruct: train QLoRA 4-bit, chọn checkpoint bằng
 ## Các notebook trên Colab
 
 1. `01_hf_to_drive_rclone.ipynb`: chuẩn bị một bản dữ liệu dùng chung trên Drive (JSONL, ZIP ảnh, REVISION).
-2. `02_sft_colab.ipynb`: train NF4, chọn best adapter local bằng val loss, kết thúc subprocess training, reload base BF16 rồi merge vào `best_model/`, upload model hoàn chỉnh; vẽ learning curves và chấm full validation một lần ở cuối.
+2. `02_sft_colab.ipynb`: train NF4, chọn best adapter local bằng val loss, kết thúc subprocess training, reload base BF16 rồi merge vào `best_model/`, upload model hoàn chỉnh; vẽ learning curves, chấm full validation trực tiếp rồi chấm lại cùng checkpoint bằng zero-shot CoT; có cell bảng so sánh metrics.
 3. `03_grpo_colab.ipynb`: recipe GRPO cũ, **giữ nguyên notebook**. Chưa chuyển sang giao diện model merged của experiment03.
 4. `04_inference_colab.ipynb`: tải `best_model` từ Drive, load local BF16 bằng vLLM, sinh predictions devtest/test. Mặc định `experiment03`; để chạy student mới, đặt `RUN_NAME` và `INPUT_RUN_NAME` thành `experiment04_reasoning`. Tự phục hồi prompt/định dạng reasoning từ artifact, chỉ lấy đáp án cuối để chấm/nộp.
 5. `05_teacher_reasoning_colab.ipynb`: dùng Qwen3-VL-8B-Thinking-FP8 chính thức qua vLLM, nhìn ảnh + câu hỏi + đáp án chuẩn, tạo các bước suy luận văn hóa cho **9.000 mẫu train**, upload dữ liệu lên Drive. Không train student ở đây.
@@ -128,6 +128,14 @@ Model merged cũ được tải từ Drive, lượng tử hóa NF4 khi load và 
 Inference mặc định BF16, không lượng tử hóa lại bản merged. Processor, tokenizer, prompt và image preprocessing lấy từ artifact đã export. `local_files_only=True` khiến model loading báo lỗi nếu thiếu file, không tìm base trên Hub. Dataset và encoder mmBERT chấm điểm là nguồn riêng, vẫn cần tải/cache khi chưa có.
 
 ## Validation
+
+Notebook 02 chạy hai lượt cuối trên **cùng model BF16 và cùng 1.000 câu validation**: zero-shot trả lời trực tiếp (`validation/`), sau đó zero-shot CoT (`validation_cot/`). CoT dùng đúng prompt 4 bước trong `prompts/qa_cot.txt`, gồm lưu ý loại watermark text. Không đổi prompt SFT hay checkpoint đã merge. Cả hai mặc định greedy; token budget direct lấy từ monitor (256), CoT mặc định 1.024 (`COT_MAX_NEW_TOKENS`), context 4.096. Khác biệt budget được ghi trong báo cáo để diễn giải so sánh.
+
+Cell cuối hiển thị bảng BERTScore-F1/P/R, BLEU, ROUGE-L, Coverage và Δ (CoT − direct). BERTScore/ROUGE/Coverage nhân 100, BLEU giữ nguyên; Δ theo điểm, không phải tăng trưởng phần trăm hay kiểm định thống kê. Trước khi lập bảng, kiểm tra cùng checkpoint signature, gold hash, số mẫu, seed, backend và precision scorer. Zero-shot ở đây nghĩa là không có in-context demonstration, vẫn dùng checkpoint đã SFT.
+
+Chỉ nội dung `<answer>` của CoT được chấm. Nếu format thiếu/sai, lưu raw generation và `format_error`, ghi đáp án rỗng để tính zero-score/Coverage, không bỏ mẫu khỏi mẫu số và không dừng cả tập. **Chưa có retry tự động trong validation.** Lượt reasoning SFT cũ vẫn giữ chính sách báo lỗi nghiêm ngặt; chính sách đáp án rỗng này dành riêng lượt zero-shot CoT mới.
+
+Progress inference/validation dùng tqdm (phần trăm, thanh tiến độ, ETA); BERTScore bật progress qua wrapper, không sửa scorer organizer. Các file `prompt_comparison.html`, `.csv`, `.json`, kết quả `validation_cot/` và prompt CoT được upload Drive cạnh kết quả direct. Nếu đã train xong, chỉ cần dùng repo mới và chạy lại các cell validation/report; không cần train lại. Rerun direct có thể dùng predictions cùng signature đã hoàn tất, rồi tạo thêm metadata cần cho bảng.
 
 SFT mặc định `monitor.limit=null`, dùng đủ 1.000 mẫu val cho loss/token accuracy định kỳ, không giới hạn train. Nếu chủ động đặt một giới hạn nhỏ hơn số mẫu, subset được chọn ngẫu nhiên seed 42, không lặp và không đổi qua các lần eval nếu manifest giữ nguyên. Recipe GRPO đang tạm dừng giữ riêng `monitor.limit=256` như trước, không bị thay đổi theo mặc định SFT.
 

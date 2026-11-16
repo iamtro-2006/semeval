@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sys
 
 from ..common import config, image, messages, path, provenance, read_jsonl, rows_for
 
@@ -14,6 +15,11 @@ def main():
         cfg = configure_merged_model(cfg, cfg['model']['name'], cfg['model'].get('load_in_4bit', False))
     set_seed(cfg['training']['seed'])
     ic = cfg['inference']
+    if ic.get('prompt_mode', 'saved') == 'cot':
+        # Apply after merged-model restoration; this changes inference only, not training artifacts.
+        cfg['prompt_file'] = ic['prompt_file']
+        cfg['reasoning'] = {'enabled': True, 'max_new_tokens': ic['max_new_tokens'],
+                            'vllm_max_model_len': ic['vllm_max_model_len']}
     reasoning = cfg.get('reasoning', {})
     if reasoning.get('enabled'):
         ic['max_new_tokens'] = max(ic['max_new_tokens'], reasoning.get('max_new_tokens', 1024))
@@ -61,7 +67,10 @@ def main():
     else:
         raise ValueError('inference.backend must be vllm or transformers')
     provenance(cfg, output.parent / output.stem)
-    with output.open('a', encoding='utf-8') as handle:
+    from tqdm import tqdm
+    with output.open('a', encoding='utf-8') as handle, tqdm(
+            total=len(rows), initial=len(done), desc='Validation' if ic['split'] == 'validation' else 'Inference',
+            unit='question', dynamic_ncols=True, mininterval=1., file=sys.stdout) as progress:
         for offset in range(0, len(pending), ic['batch_size']):
             batch = pending[offset:offset + ic['batch_size']]
             answers = generate(batch)
@@ -71,13 +80,22 @@ def main():
                 if reasoning.get('enabled'):
                     # Keep raw generations for diagnostics, but score/submit the final answer only.
                     trace = output.with_suffix('.traces.jsonl')
-                    with trace.open('a', encoding='utf-8') as traces:
-                        traces.write(json.dumps({'id': row['id'], 'generation': answer}, ensure_ascii=False) + '\n')
+                    record = {'id': row['id'], 'generation': answer}
                     from ..data.distillation import final_answer
-                    answer = final_answer(answer)
+                    error = None
+                    try:
+                        answer = final_answer(answer)
+                    except ValueError as exc:
+                        error = exc
+                        record['format_error'] = str(exc)
+                        answer = ''
+                    with trace.open('a', encoding='utf-8') as traces:
+                        traces.write(json.dumps(record, ensure_ascii=False) + '\n')
+                    if error is not None and ic.get('on_format_error', 'raise') != 'empty':
+                        raise error
                 handle.write(json.dumps({'id': row['id'], 'answer': answer}, ensure_ascii=False) + '\n')
             handle.flush()
-            print(f'{len(done) + min(offset + len(batch), len(pending))}/{len(rows)}', flush=True)
+            progress.update(len(batch))
 
 
 if __name__ == '__main__':

@@ -15,8 +15,12 @@ def upload_filters(kind):
             '+ /logging.jsonl',
             '+ /trainer_state.json',
             '+ /learning_curves.png',
+            '+ /prompt_comparison.json',
+            '+ /prompt_comparison.csv',
+            '+ /prompt_comparison.html',
+            '+ /validation_cot/prompt.txt',
         ]
-        for folder in ('validation', 'validation_subset_*'):
+        for folder in ('validation', 'validation_cot', 'validation_subset_*'):
             for filename in ('scores.json', 'evaluation.json', 'predictions.jsonl', 'predictions.traces.jsonl'):
                 rules.append(f'+ /{folder}/{filename}')
     elif kind == 'predictions':

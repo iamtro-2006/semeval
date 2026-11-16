@@ -1,5 +1,12 @@
 # Local CPU validation
 
+## Direct-answer vs zero-shot CoT evaluation
+
+- Notebook 02 appends a separate full CoT validation and an HTML comparison cell after direct-answer validation. Notebook 03/05/06 contents are unchanged. Same BF16 checkpoint/data/seed and greedy decoding, with larger CoT generation budget explicitly disclosed.
+- CPU tests verify inference prompt overrides survive merged-model prompt restoration, valid final-answer extraction, malformed CoT outputs counted as empty with raw/error traces, progress-bar completion, resume without reloading the engine, distinct CoT output directory, matching checkpoint/gold hashes, metric scaling/deltas and rejection of mismatched reports.
+- HTML/CSV/JSON comparison reports and CoT predictions/scores/errors/prompt are allowlisted for Drive. Actual rclone filter tests check traversal and inclusion rules. BERTScore progress is enabled by the precision wrapper; vendor scorer is unchanged.
+- No actual GPU CoT run, score improvement, generation reliability or throughput has been measured locally.
+
 ## vLLM final generation and teacher/student reasoning
 
 - Teacher/student smoke now select up to 100 rows without replacement using a local seed-42 RNG. CPU regressions check exact random IDs, repeatability, unchanged global RNG state, smoke journal publication, rejection by full training and isolated smoke output. Smoke retains configured epochs, checkpoint selection and full final validation; its notebook overrides set save/eval intervals to 8 steps, while full runs retain 225.

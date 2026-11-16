@@ -1,0 +1,9 @@
+Question: {question}
+
+Let's think step by step:
+1. What is the question asking, and what information would help answer it?
+2. Which image details, readable text (not watermark text), attributes, or relationships are relevant?
+3. How do these clues connect with cultural or historical knowledge to support an answer? Consider other interpretations where needed.
+4. Does the conclusion fit the image and address every part of the question?
+
+Write your reasoning in <think>...</think>, then give an accurate and culturally aware final answer in English in <answer>...</answer>.

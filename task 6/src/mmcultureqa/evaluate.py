@@ -13,9 +13,13 @@ def main():
     parser.add_argument('--run-dir', required=True)
     parser.add_argument('--limit', type=int, default=None, help='Omit to score all validation rows')
     parser.add_argument('--backend', choices=['vllm', 'transformers'], default=None)
+    parser.add_argument('--prompt-mode', choices=['saved', 'cot'], default='saved')
+    parser.add_argument('--cot-max-new-tokens', type=int, default=1024)
     args = parser.parse_args()
     if args.limit is not None and args.limit < 1:
         parser.error('--limit must be positive')
+    if args.cot_max_new_tokens < 1:
+        parser.error('--cot-max-new-tokens must be positive')
     directory = path(args.run_dir)
     config_file = directory / 'run.json'
     if not config_file.is_file():
@@ -40,6 +44,8 @@ def main():
     if not selected or any(not r.get('answer') for r in selected):
         raise ValueError('Validation must contain labelled rows')
     name = 'validation' if len(selected) == len(validation) else f'validation_subset_{len(selected)}'
+    if args.prompt_mode == 'cot':
+        name += '_cot'
     output = directory / name
     output.mkdir(parents=True, exist_ok=True)
     merged = directory / 'best_model'
@@ -59,6 +65,11 @@ def main():
     cfg['inference'] = {**defaults, 'split': split,
                         'max_new_tokens': cfg.get('monitor', {}).get('max_new_tokens', 256),
                         'do_sample': False, 'output': str(predictions), 'resume': True}
+    if args.prompt_mode == 'cot':
+        cfg['prompt_text'] = (ROOT / 'prompts/qa_cot.txt').read_text(encoding='utf-8')
+        cfg['inference'].update(prompt_mode='cot', prompt_file=str(output / 'prompt.txt'),
+                                max_new_tokens=args.cot_max_new_tokens, vllm_max_model_len=4096,
+                                on_format_error='empty')
     if args.backend:
         cfg['inference']['backend'] = args.backend
     elif cfg['model'].get('load_in_4bit'):
@@ -85,7 +96,17 @@ def main():
     summary = {'split': split, 'evaluated_rows': len(selected), 'total_validation_rows': len(validation),
                'full_validation': len(selected) == len(validation), 'scores_file': str(scores),
                'model_artifact': 'merged_bf16' if merged.exists() else 'adapter',
-               'load_in_4bit': cfg['model'].get('load_in_4bit', False)}
+               'load_in_4bit': cfg['model'].get('load_in_4bit', False),
+               'prompt_mode': args.prompt_mode,
+               'reasoning_enabled': args.prompt_mode == 'cot' or cfg.get('reasoning', {}).get('enabled', False),
+               'gold_sha256': hashlib.sha256(json.dumps(selected, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+               'predictions_sha256': hashlib.sha256(predictions.read_bytes()).hexdigest(),
+               'model_signature': (json.loads((merged / 'merge.json').read_text(encoding='utf-8')).get('signature')
+                                   if merged.exists() else None),
+               'scorer_dtype': cfg.get('monitor', {}).get('dtype', 'float16'),
+               'seed': cfg['training']['seed'],
+               'generation': cfg['inference'],
+               'empty_answers': sum(not str(r.get('answer') or '').strip() for r in predicted)}
     (output / 'evaluation.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
     print(json.dumps(summary, indent=2))
     print(scores.read_text(encoding='utf-8'))

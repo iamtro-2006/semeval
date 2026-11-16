@@ -245,7 +245,10 @@ print(ROOT)
                               'best_model/tokenizer.json', 'best_model/merge.json',
                               'best_model/prompt.txt', 'best_model/run_config.json', 'selection.json',
                               'run.json', 'logging.jsonl', 'learning_curves.png', 'validation/scores.json',
-                              'validation/predictions.traces.jsonl']
+                              'validation/predictions.traces.jsonl', 'validation_cot/scores.json',
+                              'validation_cot/predictions.jsonl', 'validation_cot/predictions.traces.jsonl',
+                              'validation_cot/prompt.txt',
+                              'prompt_comparison.html', 'prompt_comparison.csv', 'prompt_comparison.json']
         drop['merged_run'] = ['final/adapter_model.safetensors', 'final/adapter_config.json',
                               'checkpoint-225/adapter_model.safetensors', 'checkpoint-225/optimizer.pt',
                               'swift_data/train.jsonl', '.merge-failed/best_model/model.safetensors',
@@ -618,6 +621,16 @@ print(ROOT)
         self.assertTrue(inferred[1]['model']['local_files_only'])
         report = json.loads((run / 'validation/evaluation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['model_artifact'], 'merged_bf16')
+        with patch.object(sys, 'argv', ['evaluate', '--run-dir', str(run), '--prompt-mode', 'cot']), patch('subprocess.run', side_effect=child):
+            evaluate.main()
+        cot = inferred[-1]
+        self.assertEqual(Path(cot['inference']['output']).parent.name, 'validation_cot')
+        self.assertEqual(cot['inference']['max_new_tokens'], 1024)
+        self.assertEqual(cot['inference']['on_format_error'], 'empty')
+        self.assertIn('not watermark text', Path(cot['inference']['prompt_file']).read_text(encoding='utf-8'))
+        cot_report = json.loads((run / 'validation_cot/evaluation.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['gold_sha256'], cot_report['gold_sha256'])
+        self.assertEqual(report['model_signature'], cot_report['model_signature'])
 
     def test_teacher_generation_retries_resumes_and_never_prompts_validation(self):
         self.grpo_config()
@@ -775,6 +788,86 @@ print(ROOT)
                      '<think>steps</think><answer></answer>']:
             with self.assertRaises(ValueError):
                 final_answer(text)
+
+    def test_cot_prompt_survives_model_restore_and_format_failures_count_as_empty(self):
+        self.grpo_config()
+        from mmcultureqa.common import write_jsonl, read_jsonl
+        from mmcultureqa.inference import predict
+        model = self.project / 'outputs/direct/best_model'
+        merged_fixture(model)
+        write_jsonl(self.project / 'data/prepared/validation.jsonl', [
+            dict(id='v1', image='v1.jpg', question='One?', answer='gold one'),
+            dict(id='v2', image='v2.jpg', question='Two?', answer='gold two')])
+        observed = []
+
+        def engine(cfg):
+            observed.append(cfg)
+            return lambda rows: ['<think>Relevant reasoning.</think><answer>Final only</answer>', '<think>Looping forever']
+
+        argv = ['predict', '--config', str(self.project / 'configs/inference.yaml'),
+                '--set', 'model.name=' + json.dumps(str(model)), '--set', 'inference.split=validation',
+                '--set', 'inference.prompt_mode=cot', '--set', 'inference.on_format_error=empty',
+                '--set', 'inference.prompt_file=' + json.dumps(str(self.project / 'prompts/qa_cot.txt'))]
+        captured = StringIO()
+        with patch.dict(sys.modules, {'torch': SimpleNamespace(), 'transformers': SimpleNamespace(set_seed=lambda s: None)}), \
+                patch.object(sys, 'argv', argv), patch('mmcultureqa.models.vllm_loading.load_vllm', side_effect=engine), \
+                patch('mmcultureqa.inference.predict.provenance'), redirect_stdout(captured):
+            predict.main()
+            predict.main()
+        self.assertEqual(len(observed), 1)
+        cfg = observed[0]
+        self.assertTrue(cfg['reasoning']['enabled'])
+        self.assertTrue(cfg['prompt_file'].endswith('qa_cot.txt'))
+        self.assertEqual(read_jsonl(cfg['inference']['output']), [{'id': 'v1', 'answer': 'Final only'}, {'id': 'v2', 'answer': ''}])
+        traces = read_jsonl(Path(cfg['inference']['output']).with_suffix('.traces.jsonl'))
+        self.assertIn('format_error', traces[1])
+        self.assertIn('Validation:', captured.getvalue())
+        self.assertIn('100%', captured.getvalue())
+
+    def test_comparison_scales_metrics_and_rejects_mismatched_evaluations(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.inference.comparison import build_comparison, METRICS
+        import hashlib
+        run = self.project / 'outputs/compare'
+        for index, name in enumerate(('validation', 'validation_cot')):
+            folder = run / name
+            folder.mkdir(parents=True)
+            pred = folder / 'predictions.jsonl'
+            pred.write_text('{"id":"v1","answer":"x"}\n', encoding='utf-8')
+            report = dict(prompt_mode='cot' if index else 'saved', reasoning_enabled=bool(index),
+                          model_signature='same-checkpoint', gold_sha256='same-gold', evaluated_rows=1,
+                          scorer_dtype='float16', seed=42, load_in_4bit=False, empty_answers=0,
+                          predictions_sha256=hashlib.sha256(pred.read_bytes()).hexdigest(),
+                          generation={'backend': 'vllm', 'do_sample': False, 'max_new_tokens': 1024 if index else 256})
+            (folder / 'evaluation.json').write_text(json.dumps(report), encoding='utf-8')
+            metrics = {key: (0.75 if index else 0.70) for key in METRICS}
+            metrics.update(BLEU=20 if index else 15, Coverage=1.)
+            (folder / 'scores.json').write_text(json.dumps({'submission_result': metrics}), encoding='utf-8')
+        output = build_comparison(run)
+        self.assertIn('Zero-shot vs Zero-shot CoT', output.read_text(encoding='utf-8'))
+        data = json.loads((run / 'prompt_comparison.json').read_text(encoding='utf-8'))
+        self.assertEqual(data['rows'][0]['zero_shot'], 70.)
+        self.assertEqual(data['rows'][0]['delta_points'], 5.)
+        self.assertEqual(data['rows'][3]['zero_shot'], 15.)
+        self.assertEqual(data['rows'][3]['delta_points'], 5.)
+        self.assertTrue((run / 'prompt_comparison.csv').is_file())
+        file = run / 'validation_cot/evaluation.json'
+        report['gold_sha256'] = 'different-gold'
+        file.write_text(json.dumps(report), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'gold_sha256'):
+            build_comparison(run)
+
+    def test_baseline_notebook_adds_cot_after_direct_validation_only(self):
+        ns, commands, _ = self.experiment()
+        ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+        exec(find_cell('02_sft_colab', 'VAL_LIMIT ='), ns)
+        exec(find_cell('02_sft_colab', 'COT_MAX_NEW_TOKENS ='), ns)
+        self.assertNotIn('--prompt-mode', commands[0])
+        self.assertIn('--prompt-mode', commands[1])
+        self.assertEqual(commands[1][commands[1].index('--prompt-mode') + 1], 'cot')
+        self.assertNotIn('--limit', commands[1])
+        for other in ('03_grpo_colab', '06_sft_reasoning_colab'):
+            self.assertFalse(any('COT_MAX_NEW_TOKENS =' in source for source in cells(other)))
 
     def test_active_sft_notebooks_generate_final_validation_with_vllm(self):
         for notebook in ('02_sft_colab', '06_sft_reasoning_colab'):
