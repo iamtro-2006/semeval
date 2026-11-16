@@ -1,4 +1,4 @@
-"""Generate and officially score a completed adapter on its held-out validation set."""
+"""Score a merged BF16 model (or legacy adapter) on held-out validation."""
 import argparse
 import hashlib
 import json
@@ -17,7 +17,10 @@ def main():
     if args.limit is not None and args.limit < 1:
         parser.error('--limit must be positive')
     directory = path(args.run_dir)
-    cfg = json.loads((directory / 'run.json').read_text(encoding='utf-8'))
+    config_file = directory / 'run.json'
+    if not config_file.is_file():
+        config_file = directory / 'best_model/run_config.json'
+    cfg = json.loads(config_file.read_text(encoding='utf-8'))
     split = cfg['data']['eval_split']
     if split != 'validation':
         raise ValueError('Final validation evaluation requires data.eval_split=validation')
@@ -39,11 +42,16 @@ def main():
     name = 'validation' if len(selected) == len(validation) else f'validation_subset_{len(selected)}'
     output = directory / name
     output.mkdir(parents=True, exist_ok=True)
-    adapter = directory / 'final'
-    if not (adapter / 'adapter_config.json').is_file():
-        raise FileNotFoundError(f'Missing trained adapter: {adapter}')
-    cfg['model'].update(adapter=str(adapter), adapter_revision=None,
-                        processor=str(adapter), processor_revision=None)
+    merged = directory / 'best_model'
+    if merged.exists():
+        from .models.artifacts import configure_merged_model
+        cfg = configure_merged_model(cfg, merged, load_in_4bit=False)
+    else:
+        adapter = directory / 'final'
+        if not (adapter / 'adapter_config.json').is_file():
+            raise FileNotFoundError(f'Missing trained adapter: {adapter}')
+        cfg['model'].update(adapter=str(adapter), adapter_revision=None,
+                            processor=str(adapter), processor_revision=None)
     cfg['data']['limit'] = args.limit
     predictions = output / 'predictions.jsonl'
     import yaml
@@ -75,7 +83,9 @@ def main():
                     '--gold', str(gold), '--pred', str(predictions), '--lang', 'en',
                     '--out', str(scores)], check=True, cwd=ROOT)
     summary = {'split': split, 'evaluated_rows': len(selected), 'total_validation_rows': len(validation),
-               'full_validation': len(selected) == len(validation), 'scores_file': str(scores)}
+               'full_validation': len(selected) == len(validation), 'scores_file': str(scores),
+               'model_artifact': 'merged_bf16' if merged.exists() else 'adapter',
+               'load_in_4bit': cfg['model'].get('load_in_4bit', False)}
     (output / 'evaluation.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
     print(json.dumps(summary, indent=2))
     print(scores.read_text(encoding='utf-8'))

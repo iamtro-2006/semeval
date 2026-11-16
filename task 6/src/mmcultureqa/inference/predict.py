@@ -9,6 +9,9 @@ def main():
     from transformers import set_seed
     from ..models.loading import load
     cfg = config()
+    if cfg['model'].get('merged_model'):
+        from ..models.artifacts import configure_merged_model
+        cfg = configure_merged_model(cfg, cfg['model']['name'], cfg['model'].get('load_in_4bit', False))
     set_seed(cfg['training']['seed'])
     ic = cfg['inference']
     rows = rows_for(cfg, ic['split'])

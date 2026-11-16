@@ -23,10 +23,11 @@ peft:
   bias: none
   task_type: CAUSAL_LM
   target_modules: 'model.language_model.layers.*\.(self_attn\.(q_proj|k_proj|v_proj|o_proj)|mlp\.(gate_proj|up_proj|down_proj))'
+  train_projector: false  # optional LoRA on Qwen3-VL merger + DeepStack mergers; keep ViT frozen
 training:
-  output_dir: outputs/sft
-  num_train_epochs: 3
-  learning_rate: 0.0002
+  output_dir: outputs/runs/experiment03/sft
+  num_train_epochs: 2
+  learning_rate: 0.0001
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 8
   gradient_accumulation_steps: 1  # preserve the previous effective batch of 8 on one GPU
@@ -39,17 +40,17 @@ training:
   max_grad_norm: 1.0
   logging_steps: 5
   eval_strategy: steps
-  eval_steps: 100
-  save_steps: 100
+  eval_steps: 225
+  save_steps: 225
   save_total_limit: 2
   load_best_model_at_end: true
-  metric_for_best_model: bertscore_f1
-  greater_is_better: true
+  metric_for_best_model: eval_loss
+  greater_is_better: false
   dataloader_num_workers: 2
   dataloader_pin_memory: true
   report_to: none
   seed: 42
-  predict_with_generate: true
+  predict_with_generate: false
   acc_strategy: token
 monitor:
   model: jhu-clsp/mmBERT-base

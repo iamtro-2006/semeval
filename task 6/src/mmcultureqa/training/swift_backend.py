@@ -72,6 +72,11 @@ def build_arguments(cfg, stage):
                'report_to', 'seed', 'max_steps', 'acc_strategy')
     args = {k: tc[k] for k in allowed if k in tc}
     generate = bool(tc.get('predict_with_generate', False))
+    projector = stage == 'sft' and cfg['peft'].get('train_projector', False)
+    target_regex = cfg['peft']['target_modules']
+    if projector:
+        target_regex = (rf'(?:{target_regex}|model\.visual\.'
+                        r'(?:merger|deepstack_merger_list\.\d+)\.(?:linear_fc1|linear_fc2))')
     args.update(model=mc['name'], model_revision=mc.get('revision'), model_type='qwen3_vl', use_hf=True,
                 train_type='lora', tuner_backend='peft', output_dir=str(out), add_version=False,
                 create_checkpoint_symlink=False, dataset=[str(data / 'train.jsonl')],
@@ -79,10 +84,10 @@ def build_arguments(cfg, stage):
                 val_dataset_shuffle=False, remove_unused_columns=False, strict=True, lazy_tokenize=True,
                 max_length=None, truncation_strategy='delete', packing=False, padding_free=False,
                 loss_scale='default', attn_impl=mc.get('attn_implementation', 'sdpa'),
-                torch_dtype=mc.get('dtype', 'auto'), target_regex=cfg['peft']['target_modules'],
+                torch_dtype=mc.get('dtype', 'auto'), target_regex=target_regex,
                 lora_rank=cfg['peft']['r'], lora_alpha=cfg['peft']['lora_alpha'],
                 lora_dropout=cfg['peft']['lora_dropout'], lora_bias=cfg['peft']['bias'],
-                freeze_vit=True, freeze_aligner=True)
+                freeze_vit=True, freeze_aligner=not projector)
     if mc.get('load_in_4bit'):
         args.update(quant_method='bnb', quant_bits=4, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True,
                     bnb_4bit_compute_dtype=mc.get('dtype', 'auto'))
@@ -186,6 +191,11 @@ def train(cfg, stage):
             cfg['_trainable_parameters'] = [n for n, p in trainer.model.named_parameters() if p.requires_grad]
             if not cfg['_trainable_parameters']:
                 raise RuntimeError('No trainable LoRA parameters')
+            projector_params = [n for n in cfg['_trainable_parameters']
+                                if '.visual.merger.' in n or '.visual.deepstack_merger_list.' in n]
+            if stage == 'sft' and cfg['peft'].get('train_projector') and not projector_params:
+                raise RuntimeError('Projector LoRA requested but no projector parameters are trainable')
+            cfg['_projector_trainable_parameters'] = projector_params
             provenance(cfg, native['output_dir'])
             result = super().train(trainer)
             final = Path(native['output_dir']) / 'final'
@@ -193,6 +203,12 @@ def train(cfg, stage):
             if trainer.is_world_process_zero():
                 self.processor.save_pretrained(final)
                 canonical_adapter(final, cfg['model']['name'])
+                selection = {'stage': stage, 'best_model_checkpoint': trainer.state.best_model_checkpoint,
+                             'best_metric': trainer.state.best_metric,
+                             'metric_for_best_model': trainer.args.metric_for_best_model,
+                             'global_step': trainer.state.global_step}
+                (Path(native['output_dir']) / 'selection.json').write_text(
+                    json.dumps(selection, indent=2), encoding='utf-8')
             return result
 
     out = path(cfg['training']['output_dir'])

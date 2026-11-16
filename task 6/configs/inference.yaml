@@ -1,13 +1,19 @@
 extends: configs/sft.yaml
 model:
-  adapter: outputs/sft/final
+  name: outputs/runs/experiment03/sft/best_model
+  revision: null
+  adapter: null
+  adapter_revision: null
+  load_in_4bit: false
+  local_files_only: true
+  merged_model: true
 inference:
   backend: transformers
-  split: dev
+  split: devtest
   batch_size: 8
   max_new_tokens: 256
   do_sample: false
-  output: outputs/predictions/sft_dev.jsonl
+  output: outputs/runs/experiment03/predictions/sft_devtest.jsonl
   resume: true
   vllm_gpu_memory_utilization: 0.8
   vllm_max_model_len: 2048

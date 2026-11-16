@@ -277,18 +277,58 @@ stream_run(rclone_base + ['check', 'data/raw', cloud('task6-data/raw'),
 print('Dataset ready under MMCQA/task6-data/raw')
 ''')]
 
-sft_notebook = gpu_setup + [md('''## SFT only · ms-swift + PEFT
-Default PREDICT_WITH_GENERATE=True: generate validation answers and monitor mmBERT P/R/F1.
+def experiment03_profile(cells, inference=False):
+    result = []
+    for cell in cells:
+        source = ''.join(cell['source'])
+        if cell['cell_type'] == 'code':
+            source = source.replace("RUN_NAME = 'experiment01'", "RUN_NAME = 'experiment03'", 1)
+            source = source.replace('PREDICT_WITH_GENERATE = True', 'PREDICT_WITH_GENERATE = False', 1)
+            source = source.replace("upload_filters('run')", "upload_filters('merged_run')")
+            if inference:
+                source = source.replace('USE_4BIT = True', 'USE_4BIT = False', 1)
+            # This profile exports a complete BF16 model; legacy adapter launcher belongs to GRPO.
+            source = source.partition('\ndef run(module, config, overrides, local_output, cloud_subdir):')[0]
+            cell = code(source)
+        elif source.startswith('## Experiment settings'):
+            cell = md('''## Experiment 03 settings
+SFT trains with NF4 QLoRA, BF16 compute, batch 8 and accumulation 1.
+Periodic monitoring uses teacher-forced val loss/token accuracy, without generation or mmBERT.
+Default 2 epochs, peak learning rate 1e-4 (3% warmup), eval/save every 225 optimizer steps.
+After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
+Final validation and test inference use that complete BF16 model via Transformers.
+Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
+Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchanged and deferred.
+''')
+        result.append(cell)
+    return result
+
+
+sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
+Default PREDICT_WITH_GENERATE=False: teacher-forced validation loss and token accuracy.
 NF4 base, BF16 compute; train batch 8 x accumulation 1 preserves effective batch 8 on one GPU.
-Periodic validation: eval batch 8, fixed random subset of 256 questions, seed 42.
-Full training runs 3 epochs and exports the best validation checkpoint as final/.
-Select best by BERTScore-F1. False: teacher-forced validation loss/token accuracy, select by val loss.
-Generation evaluation replaces the teacher-forced validation pass; it does not report val loss simultaneously.
+Periodic validation: batch 8, fixed random subset of 256 questions, seed 42, every 225 steps.
+Full training runs 2 epochs and selects the lowest val loss checkpoint.
+Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
+TRAIN_PROJECTOR optionally adds LoRA to the vision-language merger and DeepStack mergers; ViT stays frozen.
+best_model/ is a complete BF16 checkpoint, not a 4-bit checkpoint or a standalone adapter.
 Edit SFT_OVERRIDES for prompt and training parameters. For same-stage resume, set
-RESUME_CHECKPOINT to checkpoint-N only if you manually backed it up to Drive; automatic uploads contain final adapters only.
-'''), code('''SFT_OVERRIDES = {}  # e.g. {'training.learning_rate': 0.0001, 'prompt_file': 'prompts/qa.txt'}
+RESUME_CHECKPOINT only if you manually backed up the full checkpoint. Automatic uploads contain no resume state.
+'''), code('''TRAIN_PROJECTOR = False  # True: add LoRA to image->language merger; vision encoder stays frozen
+BASE_MODEL_RUN_NAME = ''  # empty: original Qwen; otherwise start a NEW adapter on that run's merged SFT model
+SFT_OVERRIDES = {}  # optional native project config overrides
 RESUME_CHECKPOINT = ''  # manually backed-up checkpoint-N only; final/ is not a resumable checkpoint
-sft_args = {**common, 'training.output_dir': SFT}
+from mmcultureqa.models.artifacts import require_merged_model
+sft_args = {**common, 'peft.train_projector': TRAIN_PROJECTOR, 'training.output_dir': SFT}
+if BASE_MODEL_RUN_NAME:
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', BASE_MODEL_RUN_NAME):
+        raise ValueError('BASE_MODEL_RUN_NAME must be a run name')
+    base = PROJECT_ROOT / 'outputs/inputs/bases' / BASE_MODEL_RUN_NAME / 'best_model'
+    copy(cloud(f'task6-runs/{BASE_MODEL_RUN_NAME}/sft/best_model'), base)
+    require_merged_model(base)
+    sft_args.update({'model.name': str(base), 'model.revision': None,
+                     'model.adapter': None, 'model.adapter_revision': None,
+                     'model.local_files_only': True})
 if not RUN_FULL:
     sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',
                      'training.load_best_model_at_end': False, 'training.save_steps': 1})
@@ -296,11 +336,15 @@ if RESUME_CHECKPOINT:
     copy(cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}'), SFT)
     sft_args['resume_from_checkpoint'] = str(Path(SFT) / RESUME_CHECKPOINT)
 sft_args.update(SFT_OVERRIDES)
-run('mmcultureqa.training.sft', 'configs/sft.yaml', sft_args, SFT, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
-'''), code('''if not (Path(SFT) / 'final/adapter_config.json').is_file():
-    raise FileNotFoundError('No final SFT adapter was saved')
-print('SFT adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}/final'))
-print('Notebook 03: select the same ROOT_FOLDER_ID, SFT_RUN_NAME and INPUT_SFT_STAGE.')
+run_command('mmcultureqa.training.sft', 'configs/sft.yaml', sft_args)
+require_adapter(Path(SFT) / 'final')
+# The training process has exited, releasing the 4-bit model before BF16 export.
+stream_run([sys.executable, '-m', 'mmcultureqa.export', '--run-dir', SFT])
+require_merged_model(Path(SFT) / 'best_model')
+upload_run(SFT, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
+'''), code('''require_merged_model(Path(SFT) / 'best_model')
+print('Merged BF16 model on Drive:', cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}/best_model'))
+print('Notebook 04: select the same ROOT_FOLDER_ID, INPUT_RUN_NAME and MODEL_STAGE.')
 ''')]
 
 def grpo_profile(cells):
@@ -354,8 +398,8 @@ run('mmcultureqa.training.grpo', 'configs/grpo.yaml', grpo_args, GRPO, f'task6-r
 print('GRPO adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{GRPO_STAGE}/final'))
 ''')]
 
-def final_validation(run_variable, stage_variable):
-    return [md('''## Final held-out validation score
+def final_validation(run_variable, stage_variable, merged=False):
+    result = [md('''## Final held-out validation score
 Generate answers with the saved final adapter and score with the unchanged official scorer.
 Default: ALL 1,000 validation examples, even after a one-step training smoke run.
 Set VAL_LIMIT=4 only to smoke-test evaluation; subset results are explicitly marked.
@@ -370,6 +414,12 @@ result = stream_run(cmd, check=False)
 upload_run(validation_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 result.check_returncode()
 '''.replace('__RUN_DIR__', run_variable).replace('__STAGE__', stage_variable))]
+    if merged:
+        result[0] = md(''.join(result[0]['source']).replace('saved final adapter', 'complete BF16 best_model'))
+        result[1] = code(''.join(result[1]['source']).replace(
+            "cmd += ['--backend', 'transformers' if USE_4BIT else 'vllm']",
+            "cmd += ['--backend', 'transformers']"))
+    return result
 
 def learning_curves(run_variable, stage_variable, label):
     return [md('''## Learning curves before final evaluation
@@ -389,40 +439,40 @@ upload_run(local_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 
 
 sft_notebook += learning_curves('SFT', 'SFT_STAGE', 'sft')
-sft_notebook += final_validation('SFT', 'SFT_STAGE')
+sft_notebook += final_validation('SFT', 'SFT_STAGE', merged=True)
 grpo_notebook += learning_curves('GRPO', 'GRPO_STAGE', 'grpo')
 grpo_notebook += final_validation('GRPO', 'GRPO_STAGE')
 
-inference_notebook = gpu_setup + [md('''## Test inference only
-Select run/stage names below. No manual Drive filesystem paths are needed.
+inference_notebook = experiment03_profile(gpu_setup, inference=True) + [md('''## Test inference from the merged BF16 model
+Download only experiment03's best_model from Drive. No original Qwen/adapter download is needed.
+Model and processor loading are local-files-only; missing files raise an error instead of falling back to the Hub.
+Uses the saved prompt and preprocessing from the exported training run.
 Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
-'''), code('''INPUT_RUN_NAME = RUN_NAME  # existing SFT run, e.g. experiment01
-GRPO_INPUT_RUN_NAME = f'{INPUT_RUN_NAME}_qlora'  # new notebook 03 output run
+'''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03
+MODEL_STAGE = SFT_STAGE
 SPLIT = 'devtest'
 TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test
 if SPLIT not in {'devtest', 'test'}:
     raise ValueError('Use devtest/test here; validation is evaluated in the training notebooks')
-ADAPTER_STAGES = {'sft': SFT_STAGE, 'grpo': GRPO_STAGE}
-ADAPTER_RUN_NAMES = {'sft': INPUT_RUN_NAME, 'grpo': GRPO_INPUT_RUN_NAME}
-ADAPTER_4BIT = {'sft': USE_4BIT, 'grpo': True}
+if not re.fullmatch(r'[A-Za-z0-9_-]+', INPUT_RUN_NAME) or MODEL_STAGE not in {'sft', 'sft-smoke'}:
+    raise ValueError('Choose a valid SFT run and stage')
+from mmcultureqa.models.artifacts import require_merged_model
+local_model = PROJECT_ROOT / 'outputs/inputs/models' / INPUT_RUN_NAME / MODEL_STAGE / 'best_model'
+copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{MODEL_STAGE}/best_model'), local_model)
+require_merged_model(local_model)
 predictions = RUNS / 'predictions'
-for label, stage in ADAPTER_STAGES.items():
-    input_run = ADAPTER_RUN_NAMES[label]
-    use_4bit = ADAPTER_4BIT[label]
-    adapter = PROJECT_ROOT / 'outputs/inputs/inference' / input_run / stage / 'final'
-    copy(cloud(f'task6-runs/{input_run}/{stage}/final'), adapter)
-    require_adapter(adapter)
-    overrides = {**common, 'model.adapter': str(adapter), 'model.adapter_revision': None,
-                 'model.load_in_4bit': use_4bit,
-                 'inference.backend': 'transformers' if use_4bit else 'vllm',
-                 'inference.split': SPLIT, 'inference.output': str(predictions / f'{label}_{SPLIT}.jsonl')}
-    overrides['data.limit'] = TEST_LIMIT
-    run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
-    prediction_file = predictions / f'{label}_{SPLIT}.jsonl'
-    if not prediction_file.is_file():
-        raise FileNotFoundError(f'Inference produced no predictions: {prediction_file}')
-    upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
+prediction_file = predictions / f'sft_{SPLIT}.jsonl'
+overrides = {'model.name': str(local_model), 'model.revision': None, 'model.adapter': None,
+             'model.adapter_revision': None, 'model.processor': str(local_model),
+             'model.processor_revision': None, 'model.local_files_only': True, 'model.merged_model': True,
+             'model.dtype': 'bfloat16', 'model.load_in_4bit': False,
+             'inference.backend': 'transformers', 'inference.split': SPLIT,
+             'inference.output': str(prediction_file), 'data.limit': TEST_LIMIT}
+run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
+if not prediction_file.is_file():
+    raise FileNotFoundError(f'Inference produced no predictions: {prediction_file}')
+upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
 '''), code('''from mmcultureqa.common import read_jsonl, write_jsonl
 test_rows = read_jsonl(PROJECT_ROOT / 'data/prepared' / f'{SPLIT}.jsonl')
 if TEST_LIMIT is not None:
@@ -430,11 +480,9 @@ if TEST_LIMIT is not None:
 if test_rows and all(row.get('answer') for row in test_rows):
     gold = predictions / f'{SPLIT}_gold_en.jsonl'
     write_jsonl(gold, test_rows)
-    for label in ADAPTER_STAGES:
-        stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
-                        '--gold', str(gold), '--lang', 'en',
-                        '--pred', str(predictions / f'{label}_{SPLIT}.jsonl'),
-                        '--out', str(predictions / f'{label}_{SPLIT}_scores.json')], check=True)
+    stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
+                '--gold', str(gold), '--lang', 'en', '--pred', str(prediction_file),
+                '--out', str(predictions / f'sft_{SPLIT}_scores.json')], check=True)
     upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
 else:
     print(f'{SPLIT} has no public answers. Predictions saved for submission; no local score available.')

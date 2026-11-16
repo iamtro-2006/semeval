@@ -15,6 +15,9 @@ def load(cfg, train=False):
     if not torch.cuda.is_available():
         raise RuntimeError('This entry point requires a CUDA GPU. Use the Colab notebook; data preparation runs on CPU.')
     mc = cfg['model']
+    local_only = mc.get('local_files_only', False)
+    if local_only and not path(mc['name']).is_dir():
+        raise FileNotFoundError(f'Local model not found: {path(mc["name"])}')
     dtype = mc.get('dtype', 'auto')
     if dtype == 'auto':
         dtype = 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
@@ -24,9 +27,11 @@ def load(cfg, train=False):
     base = source(mc['name'])
     proc = mc.get('processor') or base
     processor = AutoProcessor.from_pretrained(source(proc), revision=mc.get('processor_revision', mc.get('revision')),
+                                            local_files_only=local_only,
                                             min_pixels=mc['min_pixels'], max_pixels=mc['max_pixels'])
     processor.tokenizer.padding_side = 'right' if train else 'left'
     kwargs = {'revision': mc.get('revision'), 'dtype': getattr(torch, dtype),
+              'local_files_only': local_only,
               'attn_implementation': mc.get('attn_implementation', 'sdpa')}
     if train:
         # Never shard a training model with device_map='auto'. One process owns one GPU.
@@ -49,7 +54,10 @@ def load(cfg, train=False):
             raise ValueError(f'Adapter base {ac.base_model_name_or_path} does not match {mc["name"]}')
         model = PeftModel.from_pretrained(model, adapter_source, revision=mc.get('adapter_revision'), is_trainable=train)
     elif train:
-        model = get_peft_model(model, LoraConfig(**cfg['peft']))
+        peft_config = {k: v for k, v in cfg['peft'].items() if k != 'train_projector'}
+        if cfg['peft'].get('train_projector'):
+            raise ValueError('Use the native ms-swift SFT launcher for projector LoRA training')
+        model = get_peft_model(model, LoraConfig(**peft_config))
     model.config.use_cache = not train
     if train:
         model.print_trainable_parameters()

@@ -6,10 +6,10 @@ Intermediate checkpoints stay local. Keep this hook for existing callers.
 
 def upload_filters(kind):
     """Ordered rclone allowlists: new files stay local unless explicitly selected."""
-    if kind == 'run':
-        rules = [
-            '- /final/training_args.bin',
-            '+ /final/**',  # PEFT adapter and processor/tokenizer assets
+    if kind in {'run', 'merged_run'}:
+        rules = (['- /final/training_args.bin', '+ /final/**'] if kind == 'run'
+                 else ['+ /best_model/**', '+ /selection.json'])
+        rules += [
             '+ /run.json',
             '+ /swift_arguments.json',
             '+ /logging.jsonl',
