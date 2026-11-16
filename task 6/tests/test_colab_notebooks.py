@@ -626,7 +626,8 @@ print(ROOT)
         cot = inferred[-1]
         self.assertEqual(Path(cot['inference']['output']).parent.name, 'validation_cot')
         self.assertEqual(cot['inference']['max_new_tokens'], 1024)
-        self.assertEqual(cot['inference']['on_format_error'], 'empty')
+        self.assertEqual(cot['inference']['on_format_error'], 'raise')
+        self.assertEqual(cot['inference']['format_retries'], 1)
         self.assertIn('not watermark text', Path(cot['inference']['prompt_file']).read_text(encoding='utf-8'))
         cot_report = json.loads((run / 'validation_cot/evaluation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['gold_sha256'], cot_report['gold_sha256'])
@@ -823,6 +824,35 @@ print(ROOT)
         self.assertIn('format_error', traces[1])
         self.assertIn('Validation:', captured.getvalue())
         self.assertIn('100%', captured.getvalue())
+        retry_calls = []
+
+        def retry_engine(runtime):
+            def generate(batch):
+                retry_calls.append((len(batch), runtime['inference']['do_sample'], runtime['training']['seed']))
+                if len(batch) == 1:
+                    return ['<think>Corrected reasoning.</think><answer>Recovered</answer>']
+                return ['<think>Reasoning.</think><answer>First</answer>', '<think>Unfinished']
+            return generate
+
+        retry_output = self.project / 'outputs/retry.jsonl'
+        retry_argv = argv + ['--set', 'inference.format_retries=1', '--set', 'inference.output=' + json.dumps(str(retry_output))]
+        with patch.dict(sys.modules, {'torch': SimpleNamespace(), 'transformers': SimpleNamespace(set_seed=lambda s: None)}), \
+                patch.object(sys, 'argv', retry_argv), patch('mmcultureqa.models.vllm_loading.load_vllm', side_effect=retry_engine), \
+                patch('mmcultureqa.inference.predict.provenance'), redirect_stdout(StringIO()):
+            predict.main()
+        self.assertEqual(retry_calls, [(2, False, 42), (1, True, 43)])
+        self.assertEqual(read_jsonl(retry_output)[1]['answer'], 'Recovered')
+        self.assertEqual(len(read_jsonl(retry_output.with_suffix('.traces.jsonl'))), 3)
+        failure_output = self.project / 'outputs/retry_failed.jsonl'
+        failure_argv = retry_argv + ['--set', 'inference.output=' + json.dumps(str(failure_output))]
+        with patch.dict(sys.modules, {'torch': SimpleNamespace(), 'transformers': SimpleNamespace(set_seed=lambda s: None)}), \
+                patch.object(sys, 'argv', failure_argv), \
+                patch('mmcultureqa.models.vllm_loading.load_vllm', return_value=lambda batch: ['<think>Unfinished'] * len(batch)), \
+                patch('mmcultureqa.inference.predict.provenance'), redirect_stdout(StringIO()):
+            with self.assertRaisesRegex(ValueError, 'after 2 attempts'):
+                predict.main()
+        self.assertEqual(read_jsonl(failure_output), [])
+        self.assertEqual(len(read_jsonl(failure_output.with_suffix('.traces.jsonl'))), 2)
 
     def test_comparison_scales_metrics_and_rejects_mismatched_evaluations(self):
         sys.path.insert(0, str(self.project / 'src'))

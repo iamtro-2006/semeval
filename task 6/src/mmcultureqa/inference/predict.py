@@ -82,15 +82,40 @@ def main():
                     trace = output.with_suffix('.traces.jsonl')
                     record = {'id': row['id'], 'generation': answer}
                     from ..data.distillation import final_answer
-                    error = None
-                    try:
-                        answer = final_answer(answer)
-                    except ValueError as exc:
-                        error = exc
-                        record['format_error'] = str(exc)
+                    retries = ic.get('format_retries', 0)
+                    if retries not in (0, 1):
+                        raise ValueError('inference.format_retries must be 0 or 1')
+                    for attempt in range(retries + 1):
+                        record = {'id': row['id'], 'generation': answer, 'attempt': attempt + 1}
+                        error = None
+                        try:
+                            answer = final_answer(answer)
+                        except ValueError as exc:
+                            error = exc
+                            record['format_error'] = str(exc)
+                        with trace.open('a', encoding='utf-8') as traces:
+                            traces.write(json.dumps(record, ensure_ascii=False) + '\n')
+                        if error is None:
+                            break
+                        if attempt < retries:
+                            # Retry only this row; use sampling to avoid replaying a greedy loop.
+                            original = dict(ic)
+                            seed = cfg['training']['seed']
+                            try:
+                                ic.update(do_sample=True, temperature=0.7)
+                                cfg['training']['seed'] = seed + 1
+                                retry = generate([row])
+                                if len(retry) != 1:
+                                    raise ValueError('Retry returned an incorrect number of answers')
+                                answer = retry[0]
+                            finally:
+                                ic.clear()
+                                ic.update(original)
+                                cfg['training']['seed'] = seed
+                    if error is not None:
+                        if retries:
+                            raise ValueError(f'Invalid final answer for {row["id"]} after 2 attempts; see {trace}') from error
                         answer = ''
-                    with trace.open('a', encoding='utf-8') as traces:
-                        traces.write(json.dumps(record, ensure_ascii=False) + '\n')
                     if error is not None and ic.get('on_format_error', 'raise') != 'empty':
                         raise error
                 handle.write(json.dumps({'id': row['id'], 'answer': answer}, ensure_ascii=False) + '\n')

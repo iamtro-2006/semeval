@@ -133,7 +133,7 @@ Notebook 02 chạy hai lượt cuối trên **cùng model BF16 và cùng 1.000 c
 
 Cell cuối hiển thị bảng BERTScore-F1/P/R, BLEU, ROUGE-L, Coverage và Δ (CoT − direct). BERTScore/ROUGE/Coverage nhân 100, BLEU giữ nguyên; Δ theo điểm, không phải tăng trưởng phần trăm hay kiểm định thống kê. Trước khi lập bảng, kiểm tra cùng checkpoint signature, gold hash, số mẫu, seed, backend và precision scorer. Zero-shot ở đây nghĩa là không có in-context demonstration, vẫn dùng checkpoint đã SFT.
 
-Chỉ nội dung `<answer>` của CoT được chấm. Nếu format thiếu/sai, lưu raw generation và `format_error`, ghi đáp án rỗng để tính zero-score/Coverage, không bỏ mẫu khỏi mẫu số và không dừng cả tập. **Chưa có retry tự động trong validation.** Lượt reasoning SFT cũ vẫn giữ chính sách báo lỗi nghiêm ngặt; chính sách đáp án rỗng này dành riêng lượt zero-shot CoT mới.
+Chỉ nội dung `<answer>` của CoT được chấm. Nếu format thiếu/sai, lưu raw generation và `format_error`, retry đúng mẫu đó **tối đa 1 lần** với sampling temperature 0.7, seed +1. Nếu vẫn sai thì báo lỗi và dừng, không ghi đáp án rỗng hay bỏ mẫu. Predictions đã hoàn tất vẫn được giữ để resume. Lượt sinh chính của hai chế độ vẫn greedy; riêng retry CoT có sampling và được ghi rõ trong trace.
 
 Progress inference/validation dùng tqdm (phần trăm, thanh tiến độ, ETA); BERTScore bật progress qua wrapper, không sửa scorer organizer. Các file `prompt_comparison.html`, `.csv`, `.json`, kết quả `validation_cot/` và prompt CoT được upload Drive cạnh kết quả direct. Nếu đã train xong, chỉ cần dùng repo mới và chạy lại các cell validation/report; không cần train lại. Rerun direct có thể dùng predictions cùng signature đã hoàn tất, rồi tạo thêm metadata cần cho bảng.
 

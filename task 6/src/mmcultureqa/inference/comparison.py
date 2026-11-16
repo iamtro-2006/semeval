@@ -73,7 +73,7 @@ border:1px solid #e4e7ec;border-radius:14px;background:#fff}}.mmcqa-comparison h
 <table><thead><tr><th>Metric ↑</th><th>Zero-shot</th><th>Zero-shot CoT</th><th>Δ points</th></tr></thead>
 <tbody>{''.join(table_rows)}</tbody></table>
 <small>All metrics shown on a 0–100 scale. Δ = CoT − Zero-shot; higher is better.<br>
-Empty answers: {report['empty_answers'][0]} / {report['empty_answers'][1]} (direct / CoT). Invalid CoT outputs count as empty.<br>
+Empty answers: {report['empty_answers'][0]} / {report['empty_answers'][1]} (direct / CoT). CoT retries format errors once with sampling; persistent errors stop evaluation.<br>
 Generation token budgets: {report['max_new_tokens'][0]} / {report['max_new_tokens'][1]} (direct / CoT).<br>
 Zero-shot refers to prompting without demonstrations on this fine-tuned checkpoint. Differences are descriptive, not statistical significance.</small>
 </section></body></html>'''

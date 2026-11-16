@@ -69,7 +69,7 @@ def main():
         cfg['prompt_text'] = (ROOT / 'prompts/qa_cot.txt').read_text(encoding='utf-8')
         cfg['inference'].update(prompt_mode='cot', prompt_file=str(output / 'prompt.txt'),
                                 max_new_tokens=args.cot_max_new_tokens, vllm_max_model_len=4096,
-                                on_format_error='empty')
+                                on_format_error='raise', format_retries=1)
     if args.backend:
         cfg['inference']['backend'] = args.backend
     elif cfg['model'].get('load_in_4bit'):

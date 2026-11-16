@@ -598,8 +598,9 @@ sft_notebook += [md('''## Zero-shot CoT validation on the same SFT checkpoint
 After the direct-answer validation above, run the agreed four-step CoT prompt on the SAME held-out rows.
 Uses the same merged BF16 model and vLLM; training and checkpoint selection do not change.
 Only <answer> is scored. Raw reasoning and format errors are saved separately; invalid outputs
-count as unanswered (zero score / lower Coverage), rather than stopping the entire validation.
-Both modes use greedy decoding. CoT has a larger generation budget, shown in the comparison report.
+retry once with sampling; a second format failure stops validation with an explicit error.
+Both primary passes use greedy decoding; a CoT format retry uses sampling (temperature 0.7, seed +1).
+CoT has a larger generation budget, shown in the comparison report.
 No in-context demonstrations are included; both evaluations use the already fine-tuned checkpoint.
 '''), code('''COT_MAX_NEW_TOKENS = 1024
 cot_cmd = [sys.executable, '-m', 'mmcultureqa.evaluate', '--run-dir', str(validation_run),
