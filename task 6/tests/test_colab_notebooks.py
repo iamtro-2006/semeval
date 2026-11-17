@@ -363,6 +363,21 @@ print(ROOT)
         self.assertEqual(records[0]['solution'], 'train-gold')
         self.assertNotIn('train-gold', json.dumps(records[0]['messages']))
 
+    def test_qwen3_vl_smoothing_uses_next_token_alignment(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.training.swift_backend import configure_causal_label_smoothing
+        native = MagicMock(return_value=0.5)
+        trainer = SimpleNamespace(label_smoother=native)
+        outputs, labels = object(), [-100, 7, 9, -100]
+        configure_causal_label_smoothing(trainer, 0.005)
+        self.assertEqual(trainer.label_smoother(outputs, labels), 0.5)
+        native.assert_called_once_with(outputs, labels, shift_labels=True)
+        unchanged = SimpleNamespace(label_smoother=None)
+        configure_causal_label_smoothing(unchanged, 0.)
+        self.assertIsNone(unchanged.label_smoother)
+        with self.assertRaisesRegex(RuntimeError, 'initialize'):
+            configure_causal_label_smoothing(unchanged, 0.005)
+
     def test_native_sft_selects_generated_f1_every_125_steps(self):
         self.grpo_config()  # create disjoint train/validation fixture manifests
         from mmcultureqa.common import config
@@ -385,7 +400,8 @@ print(ROOT)
         self.assertIsNone(args['save_total_limit'])
         self.assertFalse(args['load_best_model_at_end'])
         self.assertEqual(args['num_train_epochs'], 1)
-        self.assertEqual(args['learning_rate'], 5e-5)
+        self.assertEqual(args['learning_rate'], 2e-4)
+        self.assertEqual(args['label_smoothing_factor'], 0.005)
         self.assertEqual(args['eval_steps'], 125)
         self.assertEqual(args['save_steps'], 125)
         self.assertEqual(args['per_device_train_batch_size'], 8)

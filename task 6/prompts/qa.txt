@@ -1,3 +1,5 @@
-Answer the question using the image and relevant cultural knowledge. Give a direct, accurate answer in English.
-
 Question: {question}
+
+Examine the image and connect the relevant visual details and readable text with the cultural or historical knowledge needed to answer the question.
+
+Give a direct, accurate, culturally grounded answer in English. Address every part of the question, including the specific names, features, uses, or significance requested.

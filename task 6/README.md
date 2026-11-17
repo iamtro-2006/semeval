@@ -22,16 +22,27 @@ All project paths resolve under /content/semeval/task 6 on Colab.
 
 BF16 frozen base + language LoRA (not NF4): r=16, alpha=32, dropout=0.05, attention q/k/v/o
 and MLP gate/up/down. Microbatch 8, accumulation 1, effective batch 8 on one GPU.
-One epoch, peak LR 5e-5, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0.
+One epoch, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.005.
 Save/eval every 125 optimizer steps. SFT_OVERRIDES can change these explicitly.
 During training, full validation computes loss/token accuracy at step 0 and every 125 steps.
 There is NO vLLM, generation F1, scorer, sleep/wake or CPU model swapping during SFT.
 All checkpoints are retained (save_total_limit=null); the trainer does not restore a provisional best.
 
-System: You are a helpful visual question answering assistant.
+System: You are a visual question answering assistant with expertise in cultures worldwide.
 
-User: Answer the question using the image and relevant cultural knowledge. Give a direct,
-accurate answer in English. Followed by Question: {question}.
+User prompt (prompts/qa.txt):
+
+```text
+Question: {question}
+
+Examine the image and connect the relevant visual details and readable text with the cultural or historical knowledge needed to answer the question.
+
+Give a direct, accurate, culturally grounded answer in English. Address every part of the question, including the specific names, features, uses, or significance requested.
+```
+
+The native framework label smoother is retained with next-token shifting explicitly enabled for
+Qwen3-VL SFT; padding/prompt labels masked with -100 retain the framework masking behavior.
+Val loss with label smoothing is not directly comparable with prior unsmoothed val loss.
 
 ## Post-training checkpoint selection
 
