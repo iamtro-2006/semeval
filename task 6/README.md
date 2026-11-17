@@ -1,80 +1,83 @@
-# Task 6 · MMCultureQA · Answer-only SFT
+# MMCultureQA: Qwen3-VL 4B / 8B SFT
 
-Pipeline hiện tại: QLoRA NF4 4-bit + BF16 compute → chọn checkpoint bằng val loss → merge adapter đã chọn vào base BF16 → đánh giá cuối/inference bằng vLLM. Không còn lượt validation CoT trong notebook SFT.
+Active models: Qwen3-VL-4B-Instruct and Qwen3-VL-8B-Instruct only. Qwen3.5 notebook,
+configuration and separate runtime requirements have been removed. Legacy artifact readers
+and archived reasoning CLI tests remain for backwards compatibility.
 
-## Notebook đang dùng
+## Notebooks
 
-| Notebook | Chức năng | Run mặc định |
+| Notebook | Purpose | Default run |
 |---|---|---|
-| 01_hf_to_drive_rclone | Chuẩn bị dữ liệu chung trên Drive | task6-data/raw |
-| 02_sft_colab | SFT Qwen3-VL-4B-Instruct | experiment03 |
-| 03_grpo_colab | Recipe GRPO cũ đang tạm dừng | experiment01_qlora |
-| 04_inference_colab | Tải model merged của một trong ba model và inference | chọn INPUT_RUN_NAME |
-| 05_sft_qwen3vl8b_colab | SFT Qwen3-VL-8B-Instruct | experiment05_qwen3vl8b |
-| 06_sft_qwen35_4b_colab | SFT Qwen3.5-4B (bản post-trained) | experiment06_qwen35_4b |
+| 01_hf_to_drive_rclone | Prepare shared dataset | task6-data/raw |
+| 02_sft_colab | Qwen3-VL-4B SFT | experiment03 |
+| 03_grpo_colab | Paused legacy GRPO recipe, unchanged | experiment01_qlora |
+| 04_inference_colab | Inference from a merged model on Drive | INPUT_RUN_NAME |
+| 05_sft_qwen3vl8b_colab | Qwen3-VL-8B SFT | experiment05_qwen3vl8b |
 
-Đã xóa notebook teacher reasoning, reasoning SFT và base-vs-SFT CoT cũ (05/06/07). Các báo cáo/dữ liệu cũ trên Drive không bị thay đổi. Một số module/CLI và test về artifact cũ được giữ để đọc lại kết quả trước đây; chúng không chạy trong notebook SFT mới.
+Both SFT notebooks use configs/sft.yaml. MODEL_SIZE selects the model identifier and pinned
+revision. Use a distinct RUN_NAME for each experiment; changing MODEL_SIZE does not rename a run.
+All project paths resolve under /content/semeval/task 6 on Colab.
 
-## Cấu hình training
+## Shared recipe
 
-| Tham số | Qwen3-VL-4B | Qwen3-VL-8B | Qwen3.5-4B |
-|---|---:|---:|---:|
-| Microbatch | 8 | 2 | 4 |
-| Gradient accumulation | 1 | 4 | 2 |
-| Effective batch, 1 GPU | 8 | 8 | 8 |
-| Eval batch | 8 | 2 | 4 |
-| Epoch mặc định | 2 | 2 | 2 |
-| Peak LR | 1e-4 | 1e-4 | 1e-4 |
-| Eval/save interval | 225 | 225 | 225 |
+BF16 frozen base + language LoRA (not NF4): r=16, alpha=32, dropout=0.05, attention q/k/v/o
+and MLP gate/up/down. Microbatch 2, accumulation 4, effective batch 8 on one GPU.
+Two epochs, peak LR 1e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0.
+Save/eval every 170 optimizer steps. SFT_OVERRIDES can change these explicitly.
+Full validation at step 0 and every evaluation; highest generated BERTScore-F1 selects the
+best checkpoint. Loss/token accuracy are also logged. Step 0 is a baseline, not a saved checkpoint.
 
-Giữ cấu hình epoch hiện tại; nếu muốn thử 1 epoch, điền `SFT_OVERRIDES = {'training.num_train_epochs': 1}` trong cell SFT. Warmup 3%, cosine decay. Tất cả train NF4 + double quantization, BF16 compute; base frozen, LoRA rank 16/alpha 32 mặc định. Cấu hình chưa benchmark GPU về tốc độ hay VRAM.
+System: You are a helpful visual question answering assistant.
 
-**Val loss được đo ngay step 0, trước cập nhật trọng số đầu tiên**, bằng `training.eval_on_start=true`; sau đó tiếp tục mỗi 225 step. Dùng đủ 1.000 mẫu validation cho teacher-forced loss/token accuracy, không generation/mmBERT trong training. Đây là giá trị đo thực để nối graph, không nội suy hoặc chèn điểm giả. Điểm step 0 không phải checkpoint được save; best checkpoint vẫn được chọn trong lịch eval/save. Resume có thể đánh giá tại bước đang resume.
+User: Answer the question using the image and relevant cultural knowledge. Give a direct,
+accurate answer in English. Followed by Question: {question}.
 
-LoRA Qwen3-VL gồm attention q/k/v/o và MLP gate/up/down. Qwen3.5 thêm các projection của linear attention (in_proj_qkv/z/b/a và out_proj), cùng full attention/MLP. `TRAIN_PROJECTOR=True` tùy chọn thêm LoRA vào merger; vision encoder vẫn frozen. Launcher xác nhận thực sự có tham số projector trainable khi bật.
+## Sequential GPU use for periodic validation
 
-Qwen3.5 là hybrid-thinking VLM, nhưng lượt SFT này **answer-only**, dùng enable_thinking=false và non-thinking prefix theo template của framework. Inference khôi phục cùng lựa chọn từ model artifact. Không thêm prompt CoT.
+1. Run native teacher-forced loss/token accuracy validation.
+2. Save a temporary snapshot of the CURRENT adapter; no held-out answer is fed to the VLM.
+3. Move training parameters, buffers, gradients and optimizer state to host RAM.
+4. Start a separate vLLM process, load BF16 base + current language adapter, generate greedily.
+5. Exit vLLM, then run the unchanged organizer scorer in a separate process.
+6. Exit scorer, restore the original training tensors to their devices and continue training.
 
-## Hai môi trường GPU
+F1 is returned to the framework for checkpoint selection. Tensor identity is preserved and
+devices are restored even on failure; child errors fail training rather than fabricate scores.
+This is single-GPU BF16-only orchestration, NOT a persistent sleeping vLLM engine. It reloads
+vLLM at every evaluation and repeats validation once for loss and once for generation.
+No second Qwen remains on GPU while training, but CPU RAM must hold the training state plus
+child-process memory. Sufficient host RAM is required. BF16 8B TRAINING can still exceed L4 VRAM;
+evaluation offload does not reduce training activations. GPU execution has not been validated locally.
 
-- **Qwen3-VL-4B/8B:** `requirements-vllm.txt`, ms-swift 3.11.3, Transformers 4.57.6, torch 2.8.0, vLLM 0.11.0.
-- **Qwen3.5-4B:** `requirements-qwen35.txt` riêng, ms-swift 4.1.3, Transformers 5.6.2, torch 2.11.0, vLLM 0.20.0. Bộ cũ không có kiến trúc qwen3_5. Không cài chồng cả hai requirements cùng lúc.
+monitor.vllm controls memory utilization (0.9), max context (2048), concurrency (2),
+CPU weight offload (4 GiB), and eager execution. CPU offload slows generation; use 0 if it fits.
+Keep TRAIN_PROJECTOR=False: vLLM adapter evaluation supports language LoRA in this recipe.
+Native predict_with_generate stays false: the custom evaluation integration invokes vLLM instead.
 
-Notebook 06 tự chọn môi trường Qwen3.5. Trong notebook 04, chọn `RUNTIME_PROFILE='qwen35'` ở cell cài đặt trước khi tải Qwen3.5; với Qwen3-VL chọn `'legacy'`. Dùng runtime sạch khi chuyển họ model; restart nếu vừa thay thư viện nhị phân. Các API Swift 4.x được xử lý riêng, không sửa recipe GRPO cũ.
+## Export, inference and storage
 
-Các pin được đối chiếu metadata package và source API chính thức; chưa thực thi load/training/vLLM trên GPU. Qwen3.5 linear attention có thể dùng đường fallback khi thiếu kernel tối ưu; hiệu năng phải đo trên Colab thực tế.
+After training restores the best adapter, save final/ locally, exit training, reload BF16 base
+and safe-merge to best_model/. Drive receives the complete best_model/ and reports, not a
+standalone adapter, intermediate checkpoints or optimizer state. Intermediate adapters used
+for evaluation are temporary. Resume uses a full LOCAL checkpoint-N, with no automatic cloud copy.
+Use training.num_train_epochs=1 to stop at total epoch 1; changing it mid-run changes the LR horizon.
 
-## Lưu model và inference
+Notebook 04 downloads task6-runs/<INPUT_RUN_NAME>/<MODEL_STAGE>/best_model from the configured
+Drive root. Model family, prompt and image preprocessing restore from the exported artifact.
+Predictions and uploads use INPUT_RUN_NAME, avoiding collisions between 4B and 8B results.
+Use devtest/test there; validation belongs to SFT. Unlabelled splits cannot be scored locally.
+Inference vLLM settings live in configs/inference.yaml; CPU offload is configurable without file patching.
+Never bypass prediction signature checks to resume another model into an existing output file.
 
-Sau training: lưu adapter đã chọn vào final/ local → tiến trình train thoát → reload base BF16 riêng → safe merge → best_model/ đầy đủ → upload Drive. Không upload adapter riêng, intermediate checkpoints, optimizer, cache hay ảnh giải nén. Tất cả dùng đường dẫn project tuyệt đối dưới `/content/semeval/task 6`.
+Runtime: requirements-vllm.txt (Swift 3.11.3, Transformers 4.57.6, torch 2.8.0, vLLM 0.11.0).
+The organizer scorer is unchanged. Dataset revision e850ede73e2f1ef3dde12e0210de67d107247ef0;
+image-disjoint seed-42 split, 9000 train / 1000 validation. No automatic CoT evaluation.
 
-```text
-MMCQA/
-  task6-data/raw/
-  task6-runs/<RUN_NAME>/sft/
-    best_model/         weights BF16 + processor/tokenizer + prompt/run_config/merge metadata
-    selection.json
-    run.json
-    logging.jsonl
-    learning_curves.png
-    validation/         predictions + điểm cuối
-```
+## Verification
 
-Notebook 04: sửa `INPUT_RUN_NAME` thành một trong ba run trong bảng, `MODEL_STAGE='sft'`, chọn runtime profile tương ứng. Model type, system/user prompt và image preprocessing lấy từ artifact đã lưu; không gắn nhầm adapter hoặc tải base gốc thay bản SFT. Qwen3.5 được kiểm tra runtime profile trước khi inference. Các model được pin revision trong YAML.
-
-Full validation cuối vẫn sinh câu trả lời cho đủ 1.000 mẫu bằng vLLM BF16, rồi chấm bằng scorer chính thức: BERTScore P/R/F1, BLEU, ROUGE-L, Coverage. VLM và scorer chạy ở subprocess riêng để giải phóng VRAM. Progress bar được giữ cho inference và BERTScore. `VAL_LIMIT=4` chỉ là tùy chọn smoke evaluation; smoke training không tự giới hạn full validation cuối.
-
-## Kiểm tra
-
-Từ repo root với PyYAML/tqdm đã cài:
-
-```bash
 python "task 6/tools/build_notebooks.py"
 python -m unittest discover -s "task 6/tests" -v
-```
 
-CPU tests dùng fixture/mock để kiểm tra đường dẫn/import Colab, model-family dispatch, argument mapping Swift 3/4, NF4/BF16, target LoRA linear attention, step-0 curve data, metadata artifact, inference và upload filters. Chúng không thay thế kiểm tra GPU, không chứng minh cải thiện điểm hay đảm bảo vừa VRAM.
-
-Dữ liệu QCRI/MMCQA-SemEval27 dùng revision e850ede73e2f1ef3dde12e0210de67d107247ef0, split theo nhóm ảnh seed 42: 9.000 train / 1.000 validation; dev/devtest giữ riêng. Organizer scorer không thay đổi.
-
-Nguồn Qwen3.5: https://swift.readthedocs.io/en/v4.1/BestPractices/Qwen3_5-Best-Practice.html và https://huggingface.co/Qwen/Qwen3.5-4B.
+CPU fixtures/mocks verify argument mapping, notebook execution, subprocess ordering, F1 return,
+error restoration, artifact handling and upload filters. They do not prove GPU fit, throughput
+or score improvements. vLLM sleep-mode reference: https://docs.vllm.ai/en/v0.11.0/features/sleep_mode.html

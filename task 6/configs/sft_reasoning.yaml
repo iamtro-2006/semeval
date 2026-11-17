@@ -7,12 +7,15 @@ data:
   reasoning_smoke: false
   reasoning_smoke_size: 100
   reasoning_smoke_seed: 42
+model:
+  load_in_4bit: true
 training:
   output_dir: outputs/runs/experiment04_reasoning/sft
   per_device_train_batch_size: 2
   gradient_accumulation_steps: 4
   per_device_eval_batch_size: 4
 monitor:
+  backend: transformers
   max_new_tokens: 1024
 reasoning:
   enabled: true

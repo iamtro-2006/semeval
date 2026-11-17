@@ -286,6 +286,7 @@ def experiment03_profile(cells, inference=False):
             source = source.replace('INSTALL_VLLM = False  # enable only for optional BF16/vLLM inference',
                                     'INSTALL_VLLM = True  # final generation uses vLLM after training exits')
             source = source.replace('PREDICT_WITH_GENERATE = True', 'PREDICT_WITH_GENERATE = False', 1)
+            source = source.replace('USE_4BIT = True', 'USE_4BIT = False', 1)
             source = source.replace("upload_filters('run')", "upload_filters('merged_run')")
             if inference:
                 source = source.replace('USE_4BIT = True', 'USE_4BIT = False', 1)
@@ -294,9 +295,12 @@ def experiment03_profile(cells, inference=False):
             cell = code(source)
         elif source.startswith('## Experiment settings'):
             cell = md('''## Experiment 03 settings
-SFT trains with NF4 QLoRA, BF16 compute, batch 8 and accumulation 1.
-Initial validation logs val loss at step 0 before any update; periodic monitoring uses val loss/token accuracy.
-Default 2 epochs, peak learning rate 1e-4 (3% warmup), eval/save every 225 optimizer steps.
+SFT trains BF16 LoRA with microbatch 2 and accumulation 4.
+Validation logs loss/token accuracy and vLLM-generated F1; F1 selects the best checkpoint.
+Training model and optimizer move to RAM while generation and scoring run sequentially on GPU.
+Each eval recreates vLLM; this is process isolation, not a persistent sleep-mode engine.
+BF16 8B training may require more VRAM than an L4; sufficient host RAM is also required.
+Default 2 epochs, peak learning rate 1e-4 (3% warmup), eval/save every 170 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
@@ -307,21 +311,28 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 
 
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
-Default PREDICT_WITH_GENERATE=False: teacher-forced val loss/token accuracy, including an initial step-0 evaluation.
-NF4 base, BF16 compute; train batch 8 x accumulation 1 preserves effective batch 8 on one GPU.
-Periodic validation: batch 8, ALL validation questions (1,000), every 225 steps.
-Full training runs 2 epochs and selects the lowest val loss checkpoint.
+BF16 LoRA with sequential vLLM validation F1 and teacher-forced loss/token accuracy, including step 0.
+BF16 base; microbatch 2 x accumulation 4 preserves effective batch 8 on one GPU.
+Periodic validation: ALL validation questions (1,000), every 170 steps.
+Full training runs 2 epochs and selects the highest generated validation F1 checkpoint.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
-TRAIN_PROJECTOR optionally adds LoRA to the vision-language merger and DeepStack mergers; ViT stays frozen.
+Keep TRAIN_PROJECTOR=False with periodic vLLM adapter validation; ViT stays frozen.
 best_model/ is a complete BF16 checkpoint, not a 4-bit checkpoint or a standalone adapter.
-Edit SFT_OVERRIDES for prompt and training parameters. For same-stage resume, set
-RESUME_CHECKPOINT only if you manually backed up the full checkpoint. Automatic uploads contain no resume state.
-'''), code('''TRAIN_PROJECTOR = False  # True: add LoRA to image->language merger; vision encoder stays frozen
+Edit SFT_OVERRIDES for prompt and training parameters. Resume uses a full LOCAL checkpoint.
+Automatic uploads contain no resume state.
+'''), code('''TRAIN_PROJECTOR = False  # Required for periodic vLLM language-adapter evaluation
 BASE_MODEL_RUN_NAME = ''  # empty: original Qwen; otherwise start a NEW adapter on that run's merged SFT model
 SFT_OVERRIDES = {}  # optional native project config overrides
-RESUME_CHECKPOINT = ''  # manually backed-up checkpoint-N only; final/ is not a resumable checkpoint
+RESUME_CHECKPOINT = ''  # local checkpoint-N; final/ is not a resumable checkpoint
 from mmcultureqa.models.artifacts import require_merged_model
-sft_args = {**common, 'peft.train_projector': TRAIN_PROJECTOR, 'training.output_dir': SFT}
+MODEL_SIZE = '4B'  # '4B' or '8B'; both use configs/sft.yaml
+MODEL_PROFILES = {
+    '4B': ('Qwen/Qwen3-VL-4B-Instruct', 'ebb281ec70b05090aa6165b016eac8ec08e71b17'),
+    '8B': ('Qwen/Qwen3-VL-8B-Instruct', '0c351dd01ed87e9c1b53cbc748cba10e6187ff3b'),
+}
+model_name, model_revision = MODEL_PROFILES[MODEL_SIZE]
+sft_args = {**common, 'model.name': model_name, 'model.revision': model_revision,
+            'peft.train_projector': TRAIN_PROJECTOR, 'training.output_dir': SFT}
 if BASE_MODEL_RUN_NAME:
     if not re.fullmatch(r'[A-Za-z0-9_-]+', BASE_MODEL_RUN_NAME):
         raise ValueError('BASE_MODEL_RUN_NAME must be a run name')
@@ -335,7 +346,8 @@ if not RUN_FULL:
     sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',
                      'training.load_best_model_at_end': False, 'training.save_steps': 1})
 if RESUME_CHECKPOINT:
-    copy(cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}'), SFT)
+    if not (Path(SFT) / RESUME_CHECKPOINT / 'trainer_state.json').is_file():
+        raise FileNotFoundError('Local checkpoint missing; restore a full checkpoint before resuming')
     sft_args['resume_from_checkpoint'] = str(Path(SFT) / RESUME_CHECKPOINT)
 sft_args.update(SFT_OVERRIDES)
 run_command('mmcultureqa.training.sft', 'configs/sft.yaml', sft_args)
@@ -449,12 +461,11 @@ inference_notebook = experiment03_profile(gpu_setup, inference=True) + [md('''##
 Download the selected run's best_model from Drive. No original Qwen/adapter download is needed.
 Model and processor loading are local-files-only; missing files raise an error instead of falling back to the Hub.
 Uses the saved prompt and preprocessing from the exported training run.
-Supports merged Qwen3-VL-4B, Qwen3-VL-8B and Qwen3.5-4B checkpoints.
-Choose RUNTIME_PROFILE='qwen35' in the install cell for Qwen3.5; legacy for Qwen3-VL.
+Supports merged Qwen3-VL-4B and Qwen3-VL-8B checkpoints.
 Set INPUT_RUN_NAME to the training run to download; model family and prompt restore from that artifact.
 Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
-'''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03 / experiment05_qwen3vl8b / experiment06_qwen35_4b
+'''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03 / experiment05_qwen3vl8b
 MODEL_STAGE = SFT_STAGE
 SPLIT = 'devtest'
 TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test
@@ -467,9 +478,7 @@ local_model = PROJECT_ROOT / 'outputs/inputs/models' / INPUT_RUN_NAME / MODEL_ST
 copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{MODEL_STAGE}/best_model'), local_model)
 require_merged_model(local_model)
 saved = json.loads((local_model / 'run_config.json').read_text(encoding='utf-8'))
-if saved['model'].get('model_type') == 'qwen3_5' and globals().get('RUNTIME_PROFILE', 'legacy') != 'qwen35':
-    raise RuntimeError('Select RUNTIME_PROFILE=qwen35 in the installation cell and rerun setup for this model')
-predictions = RUNS / 'predictions'
+predictions = PROJECT_ROOT / 'outputs/runs' / INPUT_RUN_NAME / 'predictions'
 prediction_file = predictions / f'sft_{SPLIT}.jsonl'
 overrides = {'model.name': str(local_model), 'model.revision': None, 'model.adapter': None,
              'model.adapter_revision': None, 'model.processor': str(local_model),
@@ -480,7 +489,7 @@ overrides = {'model.name': str(local_model), 'model.revision': None, 'model.adap
 run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
 if not prediction_file.is_file():
     raise FileNotFoundError(f'Inference produced no predictions: {prediction_file}')
-upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
+upload_predictions(predictions, f'task6-runs/{INPUT_RUN_NAME}/predictions')
 '''), code('''from mmcultureqa.common import read_jsonl, write_jsonl
 test_rows = read_jsonl(PROJECT_ROOT / 'data/prepared' / f'{SPLIT}.jsonl')
 if TEST_LIMIT is not None:
@@ -491,54 +500,19 @@ if test_rows and all(row.get('answer') for row in test_rows):
     stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
                 '--gold', str(gold), '--lang', 'en', '--pred', str(prediction_file),
                 '--out', str(predictions / f'sft_{SPLIT}_scores.json')], check=True)
-    upload_predictions(predictions, f'task6-runs/{RUN_NAME}/predictions')
+    upload_predictions(predictions, f'task6-runs/{INPUT_RUN_NAME}/predictions')
 else:
     print(f'{SPLIT} has no public answers. Predictions saved for submission; no local score available.')
 ''')]
 
 
 # Active notebooks: answer-only SFT, inference, and the paused legacy GRPO recipe.
-def modern_runtime_profile(cells, default='qwen35'):
-    from textwrap import indent
-    result = []
-    for cell in cells:
-        source = ''.join(cell['source'])
-        if cell['cell_type'] == 'code' and 'INSTALL_VLLM =' in source:
-            source = """# Use 'qwen35' for Qwen3.5; 'legacy' for Qwen3-VL. Select before installation.
-RUNTIME_PROFILE = '__DEFAULT__'
-INSTALL_VLLM = True
-if RUNTIME_PROFILE not in {'legacy', 'qwen35'}:
-    raise ValueError('RUNTIME_PROFILE must be legacy or qwen35')
-requirements = 'requirements-qwen35.txt' if RUNTIME_PROFILE == 'qwen35' else 'requirements-vllm.txt'
-stream_run([sys.executable, '-m', 'pip', 'install', '--upgrade', '-r', str(PROJECT_ROOT / requirements)])
-stream_run([sys.executable, '-m', 'pip', 'check'], check=False)
-stream_run(['nvidia-smi'])
-""".replace('__DEFAULT__', default)
-        elif cell['cell_type'] == 'code' and '# Fail early on dependency/import errors' in source:
-            modern = """from importlib.metadata import version
-from swift.arguments import SftArguments
-from swift.pipelines.train.sft import SwiftSft
-from swift.infer_engine import VllmEngine
-from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor
-from bitsandbytes.nn import Linear4bit
-from vllm import LLM
-import mmcultureqa.training.sft
-import mmcultureqa.inference.predict
-for name in ('torch', 'transformers', 'ms-swift', 'vllm', 'peft', 'trl'):
-    print(name, version(name), flush=True)
-print('Qwen3.5 SFT/inference imports OK', flush=True)
-"""
-            source = ("if RUNTIME_PROFILE == 'qwen35':\n    stream_run([sys.executable, '-c', "
-                      + repr(modern) + "])\nelse:\n" + indent(source, '    '))
-        result.append(code(source) if cell['cell_type'] == 'code' else cell)
-    return result
-
-
 def sft_model_notebook(run_name, config_name, title, modern=False):
     result = []
     for cell in sft_notebook:
         source = ''.join(cell['source']).replace('experiment03', run_name).replace('Experiment 03', title)
         source = source.replace("'configs/sft.yaml'", repr('configs/' + config_name))
+        source = source.replace("MODEL_SIZE = '4B'", "MODEL_SIZE = '8B'")
         if cell['cell_type'] == 'markdown':
             source = source.replace('train batch 8 x accumulation 1',
                                     'train batch 4 x accumulation 2' if modern else 'train batch 2 x accumulation 4')
@@ -548,21 +522,18 @@ def sft_model_notebook(run_name, config_name, title, modern=False):
             if source.startswith('## SFT only'):
                 source = '## ' + title + '\n' + source.split('\n', 1)[1]
         result.append(code(source) if cell['cell_type'] == 'code' else md(source))
-    return modern_runtime_profile(result) if modern else result
+    return result
 
 
-sft8b_notebook = sft_model_notebook('experiment05_qwen3vl8b', 'sft_qwen3vl8b.yaml', 'Qwen3-VL-8B · SFT')
-sft35_notebook = sft_model_notebook('experiment06_qwen35_4b', 'sft_qwen35_4b.yaml', 'Qwen3.5-4B · SFT', modern=True)
-inference_notebook = modern_runtime_profile(inference_notebook, default='legacy')
+sft8b_notebook = sft_model_notebook('experiment05_qwen3vl8b', 'sft.yaml', 'Qwen3-VL-8B · SFT')
 
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
                     ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook),
-                    ('05_sft_qwen3vl8b_colab', sft8b_notebook), ('06_sft_qwen35_4b_colab', sft35_notebook)]:
+                    ('05_sft_qwen3vl8b_colab', sft8b_notebook)]:
     titles = {'01_hf_to_drive_rclone': '# Task 6 · Hugging Face → Drive',
               '02_sft_colab': '# Task 6 · SFT · Qwen3-VL-4B', '03_grpo_colab': '# Task 6 · GRPO only',
               '04_inference_colab': '# Task 6 · Inference and scoring only',
-              '05_sft_qwen3vl8b_colab': '# Task 6 · SFT · Qwen3-VL-8B',
-              '06_sft_qwen35_4b_colab': '# Task 6 · SFT · Qwen3.5-4B'}
+              '05_sft_qwen3vl8b_colab': '# Task 6 · SFT · Qwen3-VL-8B'}
     cells = [md(''.join(cells[0]['source']).replace('# Task 6 · English QA', titles[name], 1))] + cells[1:]
     target = ROOT / 'notebooks' / f'{name}.ipynb'
     target.parent.mkdir(parents=True, exist_ok=True)

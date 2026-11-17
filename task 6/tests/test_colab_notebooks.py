@@ -307,7 +307,7 @@ print(ROOT)
         self.assertIn('INSTALL_VLLM = False', install)
 
     def test_notebooks_use_expected_precision_and_monitoring(self):
-        profiles = [('02_sft_colab', True, False), ('03_grpo_colab', True, True),
+        profiles = [('02_sft_colab', False, False), ('03_grpo_colab', True, True),
                     ('04_inference_colab', False, False)]
         for notebook, fourbit, generate in profiles:
             ns, _, _ = self.experiment(notebook)
@@ -361,7 +361,7 @@ print(ROOT)
         self.assertEqual(records[0]['solution'], 'train-gold')
         self.assertNotIn('train-gold', json.dumps(records[0]['messages']))
 
-    def test_native_sft_experiment03_selects_by_loss_every_225_steps(self):
+    def test_native_sft_selects_generated_f1_every_170_steps(self):
         self.grpo_config()  # create disjoint train/validation fixture manifests
         from mmcultureqa.common import config
         from mmcultureqa.training.swift_backend import build_arguments
@@ -375,26 +375,24 @@ print(ROOT)
         args = build_arguments(cfg, 'sft')
         self.assertEqual(len(Path(args['val_dataset'][0]).read_text(encoding='utf-8').splitlines()), 1000)
         self.assertEqual(args['acc_strategy'], 'token')
-        self.assertEqual(args['quant_bits'], 4)
-        self.assertEqual(args['bnb_4bit_quant_type'], 'nf4')
-        self.assertEqual(args['bnb_4bit_compute_dtype'], 'bfloat16')
+        self.assertNotIn('quant_bits', args)
         self.assertFalse(args['predict_with_generate'])
         self.assertIsNone(args['metric'])
-        self.assertEqual(args['metric_for_best_model'], 'loss')
-        self.assertFalse(args['greater_is_better'])
+        self.assertEqual(args['metric_for_best_model'], 'bertscore_f1')
+        self.assertTrue(args['greater_is_better'])
         self.assertEqual(args['num_train_epochs'], 2)
         self.assertEqual(args['learning_rate'], 1e-4)
-        self.assertEqual(args['eval_steps'], 225)
-        self.assertEqual(args['save_steps'], 225)
-        self.assertEqual(args['per_device_train_batch_size'], 8)
-        self.assertEqual(args['gradient_accumulation_steps'], 1)
+        self.assertEqual(args['eval_steps'], 170)
+        self.assertEqual(args['save_steps'], 170)
+        self.assertEqual(args['per_device_train_batch_size'], 2)
+        self.assertEqual(args['gradient_accumulation_steps'], 4)
         self.assertEqual(args['per_device_train_batch_size'] * args['gradient_accumulation_steps'], 8)
-        self.assertEqual(args['per_device_eval_batch_size'], 8)
+        self.assertEqual(args['per_device_eval_batch_size'], 1)
         cfg['training']['predict_with_generate'] = False
         teacher_forced = build_arguments(cfg, 'sft')
         self.assertIsNone(teacher_forced['metric'])
-        self.assertEqual(teacher_forced['metric_for_best_model'], 'loss')
-        self.assertFalse(teacher_forced['greater_is_better'])
+        self.assertEqual(teacher_forced['metric_for_best_model'], 'bertscore_f1')
+        self.assertTrue(teacher_forced['greater_is_better'])
 
     def test_grpo_checks_eval_grouping_after_overrides(self):
         cfg = self.grpo_config()
@@ -807,44 +805,100 @@ print(ROOT)
             with self.assertRaises(ValueError):
                 final_answer(text)
 
-    def test_new_sft_models_have_initial_validation_and_correct_lora_families(self):
+    def test_two_models_share_bf16_sft_config(self):
         self.grpo_config()
         from mmcultureqa.common import config
         from mmcultureqa.training.swift_backend import build_arguments
-        for filename, family, batch in [('sft.yaml', 'qwen3_vl', 8),
-                                       ('sft_qwen3vl8b.yaml', 'qwen3_vl', 2),
-                                       ('sft_qwen35_4b.yaml', 'qwen3_5', 4)]:
-            with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs' / filename)]):
-                cfg = config()
+        with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft.yaml')]):
+            cfg = config()
+        for model in ('Qwen/Qwen3-VL-4B-Instruct', 'Qwen/Qwen3-VL-8B-Instruct'):
+            cfg['model']['name'] = model
             args = build_arguments(cfg, 'sft')
-            self.assertEqual(args['model_type'], family)
             self.assertTrue(args['eval_on_start'])
-            self.assertFalse(args['predict_with_generate'])
-            self.assertEqual(args['metric_for_best_model'], 'loss')
-            self.assertEqual(args['per_device_train_batch_size'], batch)
-            self.assertEqual(batch * args['gradient_accumulation_steps'], 8)
-            self.assertEqual(args['quant_bits'], 4)
-            if family == 'qwen3_5':
-                import re
-                self.assertEqual(args['tuner_type'], 'lora')
-                self.assertNotIn('train_type', args)
-                self.assertFalse(args['enable_thinking'])
-                self.assertTrue(re.fullmatch(args['target_regex'], 'model.language_model.layers.0.linear_attn.in_proj_qkv'))
-                self.assertTrue(re.fullmatch(args['target_regex'], 'model.language_model.layers.3.self_attn.q_proj'))
-                self.assertIsNone(re.fullmatch(args['target_regex'], 'model.visual.blocks.0.attn.qkv'))
+            self.assertNotIn('quant_bits', args)
+            self.assertEqual(args['metric_for_best_model'], 'bertscore_f1')
+            self.assertEqual(args['per_device_train_batch_size'] * args['gradient_accumulation_steps'], 8)
 
-    def test_active_notebook_set_has_no_reasoning_generation_or_cot_validation(self):
+    def test_active_notebook_set_has_only_two_qwen_sft_models(self):
         active = {p.stem for p in (PROJECT / 'notebooks').glob('*.ipynb')}
-        self.assertEqual(active, {'01_hf_to_drive_rclone', '02_sft_colab', '03_grpo_colab', '04_inference_colab',
-                                 '05_sft_qwen3vl8b_colab', '06_sft_qwen35_4b_colab'})
-        for name, config_name in [('02_sft_colab', 'sft.yaml'), ('05_sft_qwen3vl8b_colab', 'sft_qwen3vl8b.yaml'),
-                                  ('06_sft_qwen35_4b_colab', 'sft_qwen35_4b.yaml')]:
-            self.assertFalse(any('COT_MAX_NEW_TOKENS' in source for source in cells(name)))
+        self.assertEqual(active, {'01_hf_to_drive_rclone', '02_sft_colab', '03_grpo_colab',
+                                 '04_inference_colab', '05_sft_qwen3vl8b_colab'})
+        for name in ('02_sft_colab', '05_sft_qwen3vl8b_colab'):
             ns, commands, _ = self.experiment(name)
             exec(find_cell(name, 'SFT_OVERRIDES ='), ns)
-            self.assertTrue(commands[0][commands[0].index('--config') + 1].endswith(config_name))
-        self.assertIn("RUNTIME_PROFILE = 'qwen35'", find_cell('06_sft_qwen35_4b_colab', 'INSTALL_VLLM ='))
-        self.assertIn("RUNTIME_PROFILE = 'legacy'", find_cell('04_inference_colab', 'INSTALL_VLLM ='))
+            self.assertTrue(commands[0][commands[0].index('--config') + 1].endswith('sft.yaml'))
+            self.assertIn('model.name=\"Qwen/Qwen3-VL-', ' '.join(commands[0]))
+        self.assertNotIn('RUNTIME_PROFILE', find_cell('04_inference_colab', 'INSTALL_VLLM ='))
+
+    def test_periodic_vllm_validation_restores_training_and_returns_f1(self):
+        self.grpo_config()
+        from contextlib import contextmanager
+        from mmcultureqa.common import config, write_jsonl
+        from mmcultureqa.training.vllm_validation import install_validation
+        with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft.yaml')]):
+            cfg = config()
+        events = []
+        trainer = SimpleNamespace(
+            evaluate=lambda **kw: {'eval_loss': 0.8},
+            save_model=lambda folder: (Path(folder).mkdir(), (Path(folder) / 'adapter_config.json').write_text('{}')),
+            log=lambda value: events.append(('log', value)),
+        )
+        @contextmanager
+        def swapped(_):
+            events.append('offload')
+            try:
+                yield
+            finally:
+                events.append('restore')
+        def child(cmd, **kw):
+            self.assertEqual(events[-1] if len(events) == 1 else events[0], 'offload')
+            if 'mmcultureqa.inference.predict' in cmd:
+                events.append('generate')
+                child_cfg = json.loads(Path(cmd[-1]).read_text())
+                self.assertFalse(child_cfg['model']['load_in_4bit'])
+                self.assertFalse(child_cfg['inference']['do_sample'])
+                self.assertEqual(child_cfg['model']['adapter_revision'], None)
+                write_jsonl(child_cfg['inference']['output'], [{'id': 'val-1', 'answer': 'Answer'}])
+            else:
+                events.append('score')
+                Path(cmd[-1]).write_text(json.dumps({'result': [{'en': {'BERTScore-F1': 0.87}}]}))
+        (self.project / cfg['training']['output_dir']).mkdir(parents=True, exist_ok=True)
+        processor = SimpleNamespace(save_pretrained=lambda _: None)
+        with patch('mmcultureqa.training.vllm_validation.training_on_cpu', swapped), \
+             patch('mmcultureqa.training.vllm_validation.subprocess.run', side_effect=child):
+            install_validation(trainer, cfg, processor)
+            metrics = trainer.evaluate()
+        self.assertEqual(metrics, {'eval_loss': 0.8, 'eval_bertscore_f1': 0.87})
+        self.assertEqual(events[:4], ['offload', 'generate', 'score', 'restore'])
+
+    def test_cpu_swap_restores_devices_after_failed_generation(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.training.vllm_validation import training_on_cpu
+        class Tensor:
+            def __init__(self, device):
+                self.data = SimpleNamespace(device=device, to=lambda target: payload(target))
+                self.grad = None
+            @property
+            def device(self):
+                return self.data.device
+        def payload(device):
+            if isinstance(device, str):
+                device = SimpleNamespace(type=device)
+            return SimpleNamespace(device=device, to=lambda target: payload(target))
+        cuda = SimpleNamespace(type='cuda')
+        parameter, gradient, state = Tensor(cuda), Tensor(cuda), Tensor(cuda)
+        parameter.grad = gradient
+        trainer = SimpleNamespace(model=SimpleNamespace(parameters=lambda: [parameter], buffers=lambda: []),
+                                  optimizer=SimpleNamespace(state={0: {'exp_avg': state}}))
+        torch = SimpleNamespace(is_tensor=lambda x: isinstance(x, Tensor), cuda=MagicMock())
+        with patch.dict(sys.modules, torch=torch):
+            with self.assertRaisesRegex(RuntimeError, 'child failed'):
+                with training_on_cpu(trainer):
+                    self.assertEqual(parameter.device.type, 'cpu')
+                    self.assertEqual(state.device.type, 'cpu')
+                    raise RuntimeError('child failed')
+        for tensor in (parameter, gradient, state):
+            self.assertEqual(tensor.device.type, 'cuda')
 
     def test_step_zero_val_loss_is_preserved_in_learning_curve(self):
         sys.path.insert(0, str(self.project / 'src'))
@@ -1002,12 +1056,12 @@ print(ROOT)
 
 
     def test_active_sft_notebooks_generate_final_validation_with_vllm(self):
-        for notebook in ('02_sft_colab', '05_sft_qwen3vl8b_colab', '06_sft_qwen35_4b_colab'):
+        for notebook in ('02_sft_colab', '05_sft_qwen3vl8b_colab'):
             ns, commands, _ = self.experiment(notebook)
             ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
             exec(find_cell(notebook, 'VAL_LIMIT ='), ns)
             self.assertEqual(commands[0][-2:], ['--backend', 'vllm'])
-        self.assertEqual(ns['RUN_NAME'], 'experiment06_qwen35_4b')
+        self.assertEqual(ns['RUN_NAME'], 'experiment05_qwen3vl8b')
 
 
     def test_teacher_and_student_smoke_use_100_seed42_training_rows(self):

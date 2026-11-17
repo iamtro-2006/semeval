@@ -5,7 +5,7 @@ model:
   adapter_revision: null
   processor: null
   dtype: bfloat16
-  load_in_4bit: true
+  load_in_4bit: false
   attn_implementation: sdpa
   min_pixels: 65536
   max_pixels: 262144
@@ -15,7 +15,7 @@ data:
   eval_split: validation
   limit: null
 prompt_file: prompts/qa.txt
-system_prompt: You are a visual question answering assistant with expertise in cultures worldwide.
+system_prompt: You are a helpful visual question answering assistant.
 peft:
   r: 16
   lora_alpha: 32
@@ -29,9 +29,9 @@ training:
   output_dir: outputs/runs/experiment03/sft
   num_train_epochs: 2
   learning_rate: 0.0001
-  per_device_train_batch_size: 8
-  per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 1  # preserve the previous effective batch of 8 on one GPU
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 4
   gradient_checkpointing: true
   gradient_checkpointing_kwargs: {use_reentrant: false}
   optim: adamw_torch_fused
@@ -41,12 +41,12 @@ training:
   max_grad_norm: 1.0
   logging_steps: 5
   eval_strategy: steps
-  eval_steps: 225
-  save_steps: 225
+  eval_steps: 170
+  save_steps: 170
   save_total_limit: 2
   load_best_model_at_end: true
-  metric_for_best_model: eval_loss
-  greater_is_better: false
+  metric_for_best_model: eval_bertscore_f1
+  greater_is_better: true
   dataloader_num_workers: 2
   dataloader_pin_memory: true
   report_to: none
@@ -54,6 +54,13 @@ training:
   predict_with_generate: false
   acc_strategy: token
 monitor:
+  backend: vllm
+  vllm:
+    vllm_gpu_memory_utilization: 0.9
+    vllm_max_model_len: 2048
+    vllm_max_num_seqs: 2
+    vllm_cpu_offload_gb: 4
+    vllm_enforce_eager: true
   model: jhu-clsp/mmBERT-base
   revision: c5955035435e2bf121cde7f3c8863ef52ff35d82
   num_layers: 17
