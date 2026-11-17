@@ -38,6 +38,12 @@ def upload_filters(kind):
     elif kind == 'reasoning':
         rules = [f'+ /{name}' for name in ('train_reasoning.jsonl', 'dataset.json', 'generation.json',
                                           'attempts.jsonl', 'rejected.jsonl', 'audit_sample.jsonl')]
+    elif kind == 'inference_comparison':
+        rules = ['+ /comparison.html', '+ /comparison.csv', '+ /comparison.json', '+ /settings.json']
+        for model in ('base', 'sft'):
+            for filename in ('config.json', 'predictions.jsonl', 'predictions.traces.jsonl',
+                             'predictions.signature', 'scores.json', 'predictions/run.json'):
+                rules.append(f'+ /{model}/{filename}')
     else:
         raise ValueError(f'Unknown upload kind: {kind}')
     rules.append('- **')

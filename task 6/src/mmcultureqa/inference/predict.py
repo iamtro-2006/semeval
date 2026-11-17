@@ -15,6 +15,10 @@ def main():
         cfg = configure_merged_model(cfg, cfg['model']['name'], cfg['model'].get('load_in_4bit', False))
     set_seed(cfg['training']['seed'])
     ic = cfg['inference']
+    if 'dtype' in ic:
+        if ic['dtype'] not in {'float16', 'bfloat16'}:
+            raise ValueError('inference.dtype must be float16 or bfloat16')
+        cfg['model']['dtype'] = ic['dtype']
     if ic.get('prompt_mode', 'saved') == 'cot':
         # Apply after merged-model restoration; this changes inference only, not training artifacts.
         cfg['prompt_file'] = ic['prompt_file']

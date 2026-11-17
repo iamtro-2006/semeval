@@ -625,14 +625,141 @@ upload_run(validation_run, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
 print('Saved comparison: prompt_comparison.html / .csv / .json')
 ''')]
 
+base_sft_notebook = experiment03_profile(gpu_setup[:-2]) + [md('''## Base FP16 vs saved SFT · inference only
+One notebook, two sequential inference processes: original Qwen3-VL-4B-Instruct and your Drive best_model.
+Both run in FP16 with the same simple zero-shot CoT prompt, image limits and decoding settings.
+The merged SFT files on Drive remain BF16; FP16 casting happens at load time only.
+No training or merging. Model processes exit before scoring or loading the next model.
+Default: all 1,000 held-out validation questions. LIMIT=4 is an explicit inference smoke test.
+Each malformed answer retries once; a second failure raises an error and preserves traces.
+'''), code('''import copy as copy_module
+import json, re, yaml
+from mmcultureqa.common import merge, read_jsonl, write_jsonl
+from mmcultureqa.models.artifacts import require_merged_model
+from mmcultureqa.storage import upload_filters
+
+RUN_NAME = 'base_fp16_vs_sft_cot01'  # use a new name when changing settings
+SFT_RUN_NAME = 'experiment03'
+SFT_MODEL_STAGE = 'sft'
+SPLIT = 'validation'  # validation for metrics; devtest/test for unlabelled inference
+LIMIT = None
+MAX_NEW_TOKENS = 1024
+for name in (RUN_NAME, SFT_RUN_NAME):
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+        raise ValueError('Use letters, digits, underscores or hyphens for run names')
+if SFT_MODEL_STAGE not in {'sft', 'sft-smoke'} or SPLIT not in {'validation', 'devtest', 'test'}:
+    raise ValueError('Choose a valid SFT stage and held-out split')
+if LIMIT is not None and (not isinstance(LIMIT, int) or LIMIT < 1):
+    raise ValueError('LIMIT must be null or a positive integer')
+
+OUTPUT = PROJECT_ROOT / 'outputs/inference_runs' / RUN_NAME
+OUTPUT.mkdir(parents=True, exist_ok=True)
+local_sft = PROJECT_ROOT / 'outputs/inputs/models' / SFT_RUN_NAME / SFT_MODEL_STAGE / 'best_model'
+copy(cloud(f'task6-runs/{SFT_RUN_NAME}/{SFT_MODEL_STAGE}/best_model'), local_sft)
+require_merged_model(local_sft)
+saved_sft = json.loads((local_sft / 'run_config.json').read_text(encoding='utf-8'))
+source = yaml.safe_load((PROJECT_ROOT / 'configs/sft.yaml').read_text(encoding='utf-8'))
+inference = yaml.safe_load((PROJECT_ROOT / 'configs/inference.yaml').read_text(encoding='utf-8'))
+inference.pop('extends', None)
+template = merge(source, inference)
+for key in ('min_pixels', 'max_pixels'):
+    template['model'][key] = saved_sft['model'][key]
+rows = read_jsonl(PROJECT_ROOT / 'data/prepared' / f'{SPLIT}.jsonl')
+if SPLIT == 'validation':
+    train = read_jsonl(PROJECT_ROOT / 'data/prepared/train.jsonl')
+    if ({r['id'] for r in rows} & {r['id'] for r in train}
+            or {r['image'] for r in rows} & {r['image'] for r in train}):
+        raise ValueError('Training/validation overlap')
+rows = rows[:LIMIT] if LIMIT is not None else rows
+if not rows:
+    raise ValueError('Selected split is empty')
+gold = OUTPUT / 'gold_en.jsonl'
+write_jsonl(gold, rows)
+settings = {'source_sft_run': SFT_RUN_NAME, 'source_sft_stage': SFT_MODEL_STAGE, 'split': SPLIT,
+            'limit': LIMIT, 'count': len(rows), 'dtype': 'float16',
+            'system_prompts': {'base': source.get('system_prompt'), 'sft': saved_sft.get('system_prompt')},
+            'prompt': (PROJECT_ROOT / 'prompts/qa_cot_simple.txt').read_text(encoding='utf-8'),
+            'seed': 42, 'temperature': 0.7, 'top_p': 0.8, 'top_k': 20, 'presence_penalty': 1.5,
+            'max_new_tokens': MAX_NEW_TOKENS}
+(OUTPUT / 'settings.json').write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def upload_inference_comparison():
+    copy(OUTPUT, cloud(f'task6-inference/{RUN_NAME}'), *upload_filters('inference_comparison'))
+'''), md('''## Run both models on the same questions
+Original base loads from its pinned Hugging Face revision. SFT loads from the local Drive download.
+Primary decoding uses sampling temperature 0.7, top-p 0.8, top-k 20, presence penalty 1.5.
+These are controlled inference settings, not proof of a quality improvement. Inspect the raw traces.
+'''), code('''for label in ('base', 'sft'):
+    folder = OUTPUT / label
+    folder.mkdir(parents=True, exist_ok=True)
+    cfg = copy_module.deepcopy(template)
+    cfg['model'].update(name=source['model']['name'] if label == 'base' else str(local_sft),
+        revision=source['model']['revision'] if label == 'base' else None,
+        adapter=None, adapter_revision=None, processor=None, processor_revision=None,
+        load_in_4bit=False, dtype='float16', merged_model=label == 'sft', local_files_only=label == 'sft')
+    cfg['data'].update(limit=LIMIT)
+    cfg['training']['seed'] = 42
+    cfg['inference'].update(backend='vllm', dtype='float16',
+        split=SPLIT, output=str(folder / 'predictions.jsonl'), resume=True,
+        prompt_mode='cot', prompt_file=str(PROJECT_ROOT / 'prompts/qa_cot_simple.txt'),
+        max_new_tokens=MAX_NEW_TOKENS, vllm_max_model_len=4096, vllm_max_num_seqs=4,
+        do_sample=True, temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5,
+        on_format_error='raise', format_retries=1)
+    config_file = folder / 'config.json'
+    config_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(f'Running {label.upper()} · FP16 · {len(rows)} questions', flush=True)
+    result = stream_run([sys.executable, '-m', 'mmcultureqa.inference.predict', '--config', str(config_file)], check=False)
+    upload_inference_comparison()
+    result.check_returncode()
+    predicted = read_jsonl(folder / 'predictions.jsonl')
+    if len(predicted) != len(rows) or {r['id'] for r in predicted} != {r['id'] for r in rows}:
+        raise ValueError(f'Incomplete predictions: {label}')
+    if all(r.get('answer') for r in rows):
+        # Inference subprocess has exited, releasing its model before loading the scorer.
+        stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
+            '--gold', str(gold), '--pred', str(folder / 'predictions.jsonl'), '--lang', 'en',
+            '--out', str(folder / 'scores.json')])
+        upload_inference_comparison()
+    else:
+        print(f'{SPLIT}: no public labels; predictions/traces saved without scores.')
+'''), md('''## Model comparison
+Same questions, prompt, preprocessing and FP16 inference; compare base vs SFT weights.
+Metrics are shown on a 0–100 scale; Δ = SFT − base, in points.
+'''), code('''from IPython.display import display
+import pandas as pd
+
+if all((OUTPUT / label / 'scores.json').is_file() for label in ('base', 'sft')):
+    metrics = ['BERTScore-F1', 'BERTScore-P', 'BERTScore-R', 'BLEU', 'ROUGE-L', 'Coverage']
+    table_rows = []
+    for label in ('base', 'sft'):
+        score = json.loads((OUTPUT / label / 'scores.json').read_text(encoding='utf-8'))['submission_result']
+        table_rows.append({key: score[key] * (1 if key == 'BLEU' else 100) for key in metrics})
+    table = pd.DataFrame(table_rows, index=['Original base · FP16', 'SFT best · FP16'])
+    table.loc['Δ SFT − base'] = table.iloc[1] - table.iloc[0]
+    styled = table.style.format('{:.3f}').set_caption(f'Base vs SFT · Zero-shot CoT · {len(rows):,} questions').highlight_max(
+        subset=pd.IndexSlice[table.index[:2], :], axis=0, color='#d1fae5').set_table_styles([
+            {'selector': 'caption', 'props': [('font-size', '18px'), ('font-weight', 'bold'), ('padding', '12px')]},
+            {'selector': 'th, td', 'props': [('padding', '10px 14px'), ('text-align', 'right')]}])
+    display(styled)
+    table.to_csv(OUTPUT / 'comparison.csv', encoding='utf-8-sig')
+    (OUTPUT / 'comparison.html').write_text(styled.to_html(), encoding='utf-8')
+    (OUTPUT / 'comparison.json').write_text(json.dumps({'settings': settings, 'metrics_0_100': table.to_dict(orient='index')},
+        ensure_ascii=False, indent=2), encoding='utf-8')
+    upload_inference_comparison()
+else:
+    print('No comparison scores: use the labelled validation split and complete both inference runs.')
+''')]
+
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
                     ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook),
-                    ('05_teacher_reasoning_colab', teacher_notebook), ('06_sft_reasoning_colab', reasoning_notebook)]:
+                    ('05_teacher_reasoning_colab', teacher_notebook), ('06_sft_reasoning_colab', reasoning_notebook),
+                    ('07_base_vs_sft_cot_colab', base_sft_notebook)]:
     titles = {'01_hf_to_drive_rclone': '# Task 6 · Hugging Face → Drive',
               '02_sft_colab': '# Task 6 · SFT only', '03_grpo_colab': '# Task 6 · GRPO only',
               '04_inference_colab': '# Task 6 · Inference and scoring only',
               '05_teacher_reasoning_colab': '# Task 6 · Teacher cultural reasoning',
-              '06_sft_reasoning_colab': '# Task 6 · Reasoning SFT · Qwen3-VL-4B'}
+              '06_sft_reasoning_colab': '# Task 6 · Reasoning SFT · Qwen3-VL-4B',
+              '07_base_vs_sft_cot_colab': '# Task 6 · Base vs SFT · Simple zero-shot CoT'}
     cells = [md(''.join(cells[0]['source']).replace('# Task 6 · English QA', titles[name], 1))] + cells[1:]
     target = ROOT / 'notebooks' / f'{name}.ipynb'
     target.parent.mkdir(parents=True, exist_ok=True)

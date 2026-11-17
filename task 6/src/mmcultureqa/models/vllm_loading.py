@@ -7,12 +7,16 @@ from ..common import image, messages, path
 
 def load_vllm(cfg):
     import torch
-    if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
-        raise RuntimeError('The default BF16 vLLM inference configuration requires a BF16-capable CUDA GPU')
+    if not torch.cuda.is_available():
+        raise RuntimeError('vLLM inference requires a CUDA GPU')
     if cfg['model'].get('load_in_4bit'):
         raise ValueError('This vLLM recipe uses BF16 weights. For 4-bit select inference.backend=transformers')
-    if cfg['model'].get('dtype') not in {'bfloat16', 'auto'}:
-        raise ValueError('This vLLM recipe requires model.dtype=bfloat16; use transformers for a different dtype')
+    dtype = cfg['model'].get('dtype', 'bfloat16')
+    if dtype not in {'float16', 'bfloat16', 'auto'}:
+        raise ValueError('vLLM inference supports float16 or bfloat16 in this recipe')
+    dtype = 'bfloat16' if dtype == 'auto' else dtype
+    if dtype == 'bfloat16' and not torch.cuda.is_bf16_supported():
+        raise RuntimeError('BF16 inference requires a BF16-capable GPU, or select float16')
     os.environ.update(MAX_PIXELS=str(cfg['model']['max_pixels']), MIN_PIXELS=str(cfg['model']['min_pixels']))
     from swift.llm import VllmEngine, InferRequest, RequestConfig
     mc, ic = cfg['model'], cfg['inference']
@@ -27,13 +31,13 @@ def load_vllm(cfg):
             raise ValueError('Adapter base model does not match the configured base model')
         rank = adapter_config['r']
         adapters = [str(adapter)]
-    engine = VllmEngine(mc['name'], torch.bfloat16, model_type='qwen3_vl', use_hf=True,
+    engine = VllmEngine(mc['name'], getattr(torch, dtype), model_type='qwen3_vl', use_hf=True,
                         revision=mc.get('revision'), adapters=adapters, max_lora_rank=rank,
                         max_model_len=ic['vllm_max_model_len'], max_num_seqs=ic['vllm_max_num_seqs'],
                         gpu_memory_utilization=ic['vllm_gpu_memory_utilization'],
                         enable_prefix_caching=True, limit_mm_per_prompt={'image': 1, 'video': 0},
                         seed=cfg['training']['seed'])
-    cfg['_dtype'] = 'bfloat16'
+    cfg['_dtype'] = dtype
 
     def generate(rows):
         requests = []
@@ -43,6 +47,8 @@ def load_vllm(cfg):
             requests.append(InferRequest(messages=msg, images=[image(row)]))
         responses = engine.infer(requests, RequestConfig(max_tokens=ic['max_new_tokens'],
             temperature=ic.get('temperature', 0.8) if ic['do_sample'] else 0.0,
+            top_p=ic.get('top_p'), top_k=ic.get('top_k'),
+            repetition_penalty=ic.get('repetition_penalty'), presence_penalty=ic.get('presence_penalty', 0.),
             seed=cfg['training']['seed']), use_tqdm=False)
         answers = []
         for response in responses:

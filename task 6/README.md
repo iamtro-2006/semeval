@@ -30,6 +30,11 @@ Pipeline dùng Qwen3-VL-4B-Instruct: train QLoRA 4-bit, chọn checkpoint bằng
 4. `04_inference_colab.ipynb`: tải `best_model` từ Drive, load local BF16 bằng vLLM, sinh predictions devtest/test. Mặc định `experiment03`; để chạy student mới, đặt `RUN_NAME` và `INPUT_RUN_NAME` thành `experiment04_reasoning`. Tự phục hồi prompt/định dạng reasoning từ artifact, chỉ lấy đáp án cuối để chấm/nộp.
 5. `05_teacher_reasoning_colab.ipynb`: dùng Qwen3-VL-8B-Thinking-FP8 chính thức qua vLLM, nhìn ảnh + câu hỏi + đáp án chuẩn, tạo các bước suy luận văn hóa cho **9.000 mẫu train**, upload dữ liệu lên Drive. Không train student ở đây.
 6. `06_sft_reasoning_colab.ipynb`: tải dữ liệu teacher hoàn chỉnh, kiểm tra hash/split/coverage, SFT Qwen3-VL-4B-Instruct với reasoning và đáp án; merge best BF16 và chấm full validation bằng vLLM. Run riêng `experiment04_reasoning`.
+7. `07_base_vs_sft_cot_colab.ipynb`: **một notebook inference cho cả hai model**: Qwen3-VL-4B-Instruct gốc từ Hub và SFT best từ Drive. Chạy tuần tự bằng vLLM ở FP16, cùng user prompt zero-shot CoT ngắn. Giữ nguyên system prompt cũ (base từ config, SFT từ artifact); không train lại hoặc sửa bản model BF16 trên Drive. Có bảng metrics base/SFT/Δ và raw reasoning để kiểm tra.
+
+Notebook 07 mặc định dùng `SFT_RUN_NAME='experiment03'`, `SFT_MODEL_STAGE='sft'`, full validation 1.000 câu; `LIMIT=4` để thử nhanh. User prompt nằm trong `prompts/qa_cot_simple.txt`: chỉ yêu cầu suy luận từng bước từ ảnh và kiến thức văn hóa, xuất reasoning/answer bằng hai cặp thẻ, không có checklist bốn bước. System prompt không chứa thêm yêu cầu CoT.
+
+Cả hai model inference FP16 không quantize, cùng image limits, seed 42, temperature 0.7, top-p 0.8, top-k 20 và presence penalty 1.5. Mẫu sai format retry tối đa một lần; vẫn sai thì dừng và giữ trace. Chạy một model rồi thoát subprocess, chấm điểm trong subprocess riêng, sau đó mới chạy model tiếp theo. Kết quả mới lưu `MMCQA/task6-inference/base_fp16_vs_sft_cot01/`, gồm predictions/traces/config/scores của base và SFT, bảng HTML/CSV/JSON; không upload lại model weights. Với devtest/test chưa có nhãn, chỉ xuất predictions/traces.
 
 Nếu chạy hướng reasoning, thứ tự là **01 (nếu chưa có dữ liệu) → 05 → 06 → 04**. Notebook 02 là baseline riêng, không phải điều kiện để chạy 06. Chi tiết prompt, cấu hình và đường dẫn Drive: [docs/REASONING.md](docs/REASONING.md).
 

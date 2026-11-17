@@ -224,6 +224,9 @@ print(ROOT)
                             'grpo_test/run.json', 'sft_test_scores.json', 'sft_devtest.traces.jsonl'],
             'reasoning': ['train_reasoning.jsonl', 'dataset.json', 'generation.json',
                           'attempts.jsonl', 'rejected.jsonl', 'audit_sample.jsonl'],
+            'inference_comparison': ['settings.json', 'comparison.html', 'comparison.csv', 'comparison.json',
+                                     'base/predictions.jsonl', 'base/config.json', 'base/predictions/run.json',
+                                     'sft/scores.json', 'sft/predictions.traces.jsonl', 'sft/predictions.signature'],
             'data': ['REVISION', 'qa/mena/train_en.jsonl', 'qa/mena/dev_en.jsonl',
                      'qa/mena/devtest_en.jsonl', 'archives/images_mena_train.zip',
                      'archives/images_mena_dev.zip', 'archives/images_mena_devtest.zip'],
@@ -238,6 +241,7 @@ print(ROOT)
             'predictions': ['devtest_gold_en.jsonl', 'sft_devtest.signature',
                             'some_new_file.jsonl', 'some_new_directory/cache.bin'],
             'reasoning': ['teacher_weights/model.safetensors', 'images/example.jpg', 'cache.bin'],
+            'inference_comparison': ['gold_en.jsonl', 'best_model/model.safetensors', 'sft/optimizer.pt', 'cache.bin'],
             'data': ['qa/mena/train_en.parquet', 'README.md', '.cache/huggingface/download/metadata',
                      'train/images/example.jpg', 'qa/mena/train_arz.jsonl', 'archives/audio.zip'],
         }
@@ -763,7 +767,8 @@ print(ROOT)
             observed.append(cfg)
             return lambda rows: ['<think>1. Visible evidence.\n2. Cultural context.</think>\n<answer>Final only</answer>']
 
-        argv = ['predict', '--config', str(self.project / 'configs/inference.yaml'), '--set', f'model.name={json.dumps(str(model))}']
+        argv = ['predict', '--config', str(self.project / 'configs/inference.yaml'), '--set', f'model.name={json.dumps(str(model))}',
+                '--set', 'inference.dtype=float16']
         with patch.dict(sys.modules, {'torch': SimpleNamespace(), 'transformers': SimpleNamespace(set_seed=lambda s: None)}), \
                 patch.object(sys, 'argv', argv), patch('mmcultureqa.models.vllm_loading.load_vllm', side_effect=engine), \
                 patch('mmcultureqa.models.loading.load', side_effect=AssertionError('Unexpected Transformers model')), \
@@ -772,6 +777,8 @@ print(ROOT)
             predict.main()  # complete output resumes without loading the engine again
         self.assertEqual(len(observed), 1)
         cfg = observed[0]
+        self.assertEqual(cfg['model']['dtype'], 'float16')
+        self.assertEqual(cfg['system_prompt'], 'Saved cultural QA system prompt')
         self.assertEqual(cfg['inference']['max_new_tokens'], 1024)
         self.assertEqual(cfg['inference']['vllm_max_model_len'], 4096)
         self.assertEqual(read_jsonl(cfg['inference']['output']), [{'id': 'test-1', 'answer': 'Final only'}])
@@ -789,6 +796,62 @@ print(ROOT)
                      '<think>steps</think><answer></answer>']:
             with self.assertRaises(ValueError):
                 final_answer(text)
+
+    def test_vllm_fp16_and_sampling_parameters_are_forwarded(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.models.vllm_loading import load_vllm
+        cfg['model'].update(dtype='float16', load_in_4bit=False, adapter=None)
+        cfg['inference'] = dict(max_new_tokens=512, do_sample=True, temperature=0.7, top_p=0.8,
+            top_k=20, presence_penalty=1.5, vllm_max_model_len=4096, vllm_max_num_seqs=4,
+            vllm_gpu_memory_utilization=0.8)
+        factory = MagicMock(return_value=SimpleNamespace(infer=lambda requests, config, **k: []))
+        request_config = MagicMock(return_value={})
+        modules = {'torch': SimpleNamespace(float16='fp16', cuda=SimpleNamespace(
+            is_available=lambda: True, is_bf16_supported=lambda: False)),
+            'swift': SimpleNamespace(), 'swift.llm': SimpleNamespace(VllmEngine=factory,
+                InferRequest=lambda **k: k, RequestConfig=request_config)}
+        with patch.dict(sys.modules, modules):
+            generate = load_vllm(cfg)
+            self.assertEqual(generate([]), [])
+        self.assertEqual(factory.call_args.args[1], 'fp16')
+        self.assertEqual(request_config.call_args.kwargs['presence_penalty'], 1.5)
+        self.assertEqual(request_config.call_args.kwargs['top_p'], 0.8)
+
+    def test_single_inference_notebook_runs_original_and_saved_sft_sequentially(self):
+        ns, _, copies = self.experiment()
+        self.grpo_config()
+        from mmcultureqa.common import write_jsonl
+        write_jsonl(self.project / 'data/prepared/validation.jsonl', [
+            dict(id='v1', image='v1.jpg', question='Question?', answer='Gold')])
+        with redirect_stdout(StringIO()):
+            exec(find_cell('07_base_vs_sft_cot_colab', "RUN_NAME = 'base_fp16"), ns)
+        calls, configs = [], []
+
+        def execute(command, check=True):
+            calls.append(command[2])
+            if command[2] == 'mmcultureqa.inference.predict':
+                cfg = json.loads(Path(command[command.index('--config') + 1]).read_text(encoding='utf-8'))
+                configs.append(cfg)
+                write_jsonl(cfg['inference']['output'], [{'id': 'v1', 'answer': 'Predicted'}])
+            else:
+                Path(command[command.index('--out') + 1]).write_text('{}', encoding='utf-8')
+            return subprocess.CompletedProcess(command, 0)
+
+        ns['stream_run'] = execute
+        with redirect_stdout(StringIO()):
+            exec(find_cell('07_base_vs_sft_cot_colab', "for label in ('base', 'sft'):"), ns)
+        self.assertEqual(calls, ['mmcultureqa.inference.predict', 'mmcultureqa.score'] * 2)
+        self.assertEqual(configs[0]['model']['name'], 'Qwen/Qwen3-VL-4B-Instruct')
+        self.assertFalse(configs[0]['model']['merged_model'])
+        self.assertTrue(configs[1]['model']['merged_model'])
+        for cfg in configs:
+            self.assertIsNone(cfg['model']['adapter'])
+            self.assertFalse(cfg['model']['load_in_4bit'])
+            self.assertEqual(cfg['inference']['dtype'], 'float16')
+            self.assertNotIn('system_prompt', cfg['inference'])
+            self.assertEqual(cfg['inference']['format_retries'], 1)
+            self.assertTrue(cfg['inference']['prompt_file'].endswith('qa_cot_simple.txt'))
+        self.assertTrue(any(source.endswith('experiment03/sft/best_model') for source, _ in copies))
 
     def test_cot_prompt_survives_model_restore_and_format_failures_count_as_empty(self):
         self.grpo_config()

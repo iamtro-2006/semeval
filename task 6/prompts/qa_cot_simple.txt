@@ -1,0 +1,5 @@
+Question: {question}
+
+Let's think step by step, using the image and relevant cultural knowledge to give an accurate and culturally aware answer.
+
+Write your reasoning in <think>...</think> and your final answer in English in <answer>...</answer>.

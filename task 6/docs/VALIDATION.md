@@ -1,5 +1,11 @@
 # Local CPU validation
 
+## Original FP16 vs Drive SFT in one inference notebook
+
+- Notebook 07 runs original and merged SFT sequentially with one short user-only zero-shot CoT prompt. System prompts are preserved, not replaced. The SFT artifact remains BF16 on Drive; inference.dtype=float16 is applied after artifact restoration.
+- CPU mocks verify FP16 vLLM initialization without requiring BF16 support, forwarding of sampling parameters, original Hub model vs local merged SFT selection, identical inference precision, no adapters/quantization, sequential predict/score calls, and filtered uploads without weights or gold labels.
+- Notebook code cells parse; actual GPU dtype casting, model generation/CoT compliance, VRAM fitting, scores and Drive transfers are not executed locally.
+
 ## Direct-answer vs zero-shot CoT evaluation
 
 - Notebook 02 appends a separate full CoT validation and an HTML comparison cell after direct-answer validation. Notebook 03/05/06 contents are unchanged. Same BF16 checkpoint/data/seed and greedy decoding, with larger CoT generation budget explicitly disclosed.
