@@ -20,8 +20,8 @@ All project paths resolve under /content/semeval/task 6 on Colab.
 
 ## Shared recipe
 
-BF16 frozen base + language LoRA (not NF4): r=16, alpha=32, dropout=0.05, attention q/k/v/o
-and MLP gate/up/down. Microbatch 8, accumulation 1, effective batch 8 on one GPU.
+BF16 frozen base + language LoRA (not NF4): r=32, alpha=64, dropout=0.05, attention q/k/v/o
+and MLP gate/up/down. Microbatch 4, accumulation 2, effective batch 8 on one GPU.
 1.2 epochs, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.005.
 Save every 225 optimizer steps; evaluate loss every 125 steps. SFT_OVERRIDES can change these explicitly.
 During training, full validation computes loss/token accuracy at step 0 and every 125 steps.

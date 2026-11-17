@@ -295,7 +295,7 @@ def experiment03_profile(cells, inference=False):
             cell = code(source)
         elif source.startswith('## Experiment settings'):
             cell = md('''## Experiment 03 settings
-SFT trains BF16 LoRA with microbatch 8 and accumulation 1.
+SFT trains BF16 LoRA (r=32, alpha=64) with microbatch 4 and accumulation 2.
 Training logs loss/token accuracy only; it NEVER starts vLLM or mmBERT.
 Retain every checkpoint. After training exits, merge each checkpoint and generate full validation.
 Selection uses the same merged-model vLLM path/settings as notebook 04, with CUDA graphs enabled.
@@ -314,7 +314,7 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
 BF16 LoRA; training uses teacher-forced loss/token accuracy only. No vLLM during training.
-BF16 base; microbatch 8 x accumulation 1 preserves effective batch 8 on one GPU.
+BF16 base; microbatch 4 x accumulation 2 preserves effective batch 8 on one GPU.
 Save every 225 steps (6 checkpoints over 1350 steps); retain ALL checkpoints. Periodic loss/token accuracy uses full validation.
 After 1.2 training epochs, merge and score each checkpoint on all 1,000 validation questions.
 Select the highest merged-model F1, then export that winner as best_model/.
