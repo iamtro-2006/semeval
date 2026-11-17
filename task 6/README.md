@@ -24,52 +24,52 @@ BF16 frozen base + language LoRA (not NF4): r=16, alpha=32, dropout=0.05, attent
 and MLP gate/up/down. Microbatch 8, accumulation 1, effective batch 8 on one GPU.
 One epoch, peak LR 5e-5, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0.
 Save/eval every 125 optimizer steps. SFT_OVERRIDES can change these explicitly.
-Full validation at step 0 and every evaluation; highest generated BERTScore-F1 selects the
-best checkpoint. Loss/token accuracy are also logged. Step 0 is a baseline, not a saved checkpoint.
+During training, full validation computes loss/token accuracy at step 0 and every 125 steps.
+There is NO vLLM, generation F1, scorer, sleep/wake or CPU model swapping during SFT.
+All checkpoints are retained (save_total_limit=null); the trainer does not restore a provisional best.
 
 System: You are a helpful visual question answering assistant.
 
 User: Answer the question using the image and relevant cultural knowledge. Give a direct,
 accurate answer in English. Followed by Question: {question}.
 
-## Sequential GPU use for periodic validation
+## Post-training checkpoint selection
 
-Before full validation, an automatic preflight generates on 2 images with two separate LoRA
-snapshots and a sleep/wake cycle. The same engine is reused afterwards. This is only a
-startup check; periodic/final validation still covers all 1000 examples by default.
+The training cell finishes and its process exits, releasing the training model and optimizer.
+The next cell calls `python -m mmcultureqa.select_checkpoint --run-dir <SFT>`:
 
-1. Run native teacher-forced loss/token accuracy validation.
-2. Save a temporary snapshot of the CURRENT adapter; no held-out answer is fed to the VLM.
-3. Move training parameters, buffers, gradients and optimizer state to host RAM.
-4. Initialize a persistent vLLM worker on the first eval only. Later evals wake the same engine.
-   The BF16 base stays fixed; each eval loads the CURRENT LoRA snapshot with a unique ID.
-5. Unload that adapter, clear prefix cache and sleep vLLM (level 1) BEFORE running the organizer scorer.
-6. Exit scorer, restore the original training tensors to their devices and continue training.
+1. Enumerate every local checkpoint-N in numeric order (normally 9 checkpoints / 1125 steps).
+2. Reload the original BF16 base and safe-merge that candidate adapter into a temporary model.
+3. Exit the merge process. Generate ALL 1000 validation answers using the complete merged model.
+4. Exit generation. Load mmBERT separately and score with the unchanged organizer scorer.
+5. Save scores/predictions for that checkpoint, then delete only its temporary merged weights.
+6. Select the highest F1 (earliest step breaks ties), export the winner to best_model/ and copy
+   its validation report to validation/. No redundant final generation is run.
 
-F1 is returned to the framework for checkpoint selection. Tensor identity is preserved and
-devices are restored even on failure; child errors fail training rather than fabricate scores.
-This is single-GPU BF16-only orchestration with persistent sleep/wake. Base initialization
-and compilation happen only on the first evaluation. It repeats validation once for loss and once
-for generation. New LoRA IDs and explicit unloading prevent cached adapters from going stale.
-The worker is closed on training completion, error or interruption before final export.
-Most vLLM GPU memory is released while training (CUDA context/other buffers may remain).
-CPU RAM must hold the sleeping vLLM base, offloaded training state and child-process memory. Sufficient host RAM is required. BF16 8B TRAINING can still exceed L4 VRAM;
-evaluation offload does not reduce training activations. GPU execution has not been validated locally.
+Generation uses the SAME configs/inference.yaml defaults, predict entry point and vLLM loader
+as notebook 04: BF16, batch 8, max_num_seqs 8, greedy, max_new_tokens 256, context 2048,
+CUDA graphs enabled, CPU weight offload 0. Runtime LoRA and sleep are disabled for merged models.
+This removes the slow hot-LoRA code path; exact questions/sec still depends on images and answer length.
+No base+LoRA engine is used to select a checkpoint. Legacy helper modules are inactive.
 
-monitor.vllm controls memory utilization (0.9), max context (2048), concurrency (2),
-CPU weight offload (0 GiB), and eager execution. Generation runs entirely on GPU. Sleep between
-evaluations is separate: it backs up weights in RAM to release VRAM, then restores them on wake.
-Without CPU weight offload, 8B BF16 inference must fit on the GPU; this has not been benchmarked.
-Keep TRAIN_PROJECTOR=False: vLLM adapter evaluation supports language LoRA in this recipe.
-Native predict_with_generate stays false: the custom evaluation integration invokes vLLM instead.
+Only one temporary merged candidate exists at once; after ranking it is deleted before the next
+candidate. The final winner is merged once again, avoiding keeping 9 full models on disk.
+All resumable adapter checkpoints/optimizer states remain LOCAL and take additional disk space.
+Per-checkpoint reports and ranking.json are retained. Completed scores can be reused on rerun when
+config, inference settings, adapter weights and dataset fingerprints match. A scoring failure stops
+selection; it never silently skips a candidate. Training does not need to be repeated to rerun selection.
+
+BF16 8B training and merged inference must fit the available GPU. There is no GPU validation in
+this development environment; CPU tests verify orchestration, selection and artifacts only.
 
 ## Export, inference and storage
 
-After training restores the best adapter, save final/ locally, exit training, reload BF16 base
-and safe-merge to best_model/. Drive receives the complete best_model/ and reports, not a
-standalone adapter, intermediate checkpoints or optimizer state. Intermediate adapters used
-for evaluation are temporary. Resume uses a full LOCAL checkpoint-N, with no automatic cloud copy.
-Use training.num_train_epochs=1 to stop at total epoch 1; changing it mid-run changes the LR horizon.
+The selected merged BF16 model and winning validation report are uploaded only AFTER selection.
+Drive receives best_model/, selection.json, checkpoint_selection/ranking.json and reports; no
+standalone adapters, intermediate checkpoints or optimizer states are uploaded. Local final/ is the
+last training adapter/processor; selection.json points to the actual winning checkpoint, and the
+exporter is explicitly given that checkpoint. Notebook 04 uses only best_model/.
+Resume training uses a full LOCAL checkpoint-N. Use a fresh RUN_NAME for a new experiment.
 
 Notebook 04 downloads task6-runs/<INPUT_RUN_NAME>/<MODEL_STAGE>/best_model from the configured
 Drive root. Model family, prompt and image preprocessing restore from the exported artifact.
@@ -87,16 +87,6 @@ image-disjoint seed-42 split, 9000 train / 1000 validation. No automatic CoT eva
 python "task 6/tools/build_notebooks.py"
 python -m unittest discover -s "task 6/tests" -v
 
-CPU fixtures/mocks verify argument mapping, notebook execution, subprocess ordering, F1 return,
-error restoration, artifact handling and upload filters. They do not prove GPU fit, throughput
+CPU fixtures/mocks verify argument mapping, notebook execution, merge/score ordering, F1 selection,
+score reuse, artifact handling and upload filters. They do not prove GPU fit, throughput
 or score improvements. vLLM sleep-mode reference: https://docs.vllm.ai/en/v0.11.0/features/sleep_mode.html
-
-## Pinned vLLM Qwen3-VL LoRA compatibility
-
-vLLM 0.11.0 incorrectly declares the vision tower prefix as model.visual.* instead of visual.*.
-This can wrap vision layers in LoRA and fail during image profiling with token_lora_mapping
-AssertionError. The custom engine worker applies the dense-model correction from upstream
-PR #27027 BEFORE model loading, then audits the actual LoRA module registry BEFORE profiling.
-It preserves language LoRA, image processing and BF16 weights; no assertion is bypassed and
-no site-packages files are modified. Normal merged-model inference does not enable this worker.
-Source: https://github.com/vllm-project/vllm/pull/27027

@@ -19,4 +19,4 @@ inference:
   vllm_max_model_len: 2048
   vllm_max_num_seqs: 8
   vllm_cpu_offload_gb: 0
-  vllm_enforce_eager: true
+  vllm_enforce_eager: false

@@ -120,9 +120,6 @@ def build_arguments(cfg, stage):
         args.update(predict_with_generate=generate, metric='mmcqa_bertscore' if generate else None,
                     max_new_tokens=cfg['monitor']['max_new_tokens'], temperature=0.,
                     metric_for_best_model='bertscore_f1' if generate else 'loss', greater_is_better=generate)
-        if cfg['monitor'].get('backend') == 'vllm':
-            args.update(predict_with_generate=False, metric=None,
-                        metric_for_best_model='bertscore_f1', greater_is_better=True)
     else:
         if not mc.get('adapter'):
             raise ValueError('GRPO continuation requires model.adapter')
@@ -217,10 +214,6 @@ def train(cfg, stage):
 
     class Pipeline(cls):
         def train(self, trainer):
-            validation_worker = None
-            if stage == 'sft' and cfg['monitor'].get('backend') == 'vllm':
-                from .vllm_validation import install_validation
-                validation_worker = install_validation(trainer, cfg, self.processor)
             trainer.add_callback(AdapterMetadata())
             for callback in checkpoint_callbacks():
                 trainer.add_callback(callback)
@@ -233,13 +226,7 @@ def train(cfg, stage):
                 raise RuntimeError('Projector LoRA requested but no projector parameters are trainable')
             cfg['_projector_trainable_parameters'] = projector_params
             provenance(cfg, native['output_dir'])
-            try:
-                if validation_worker is not None:
-                    validation_worker.preflight()
-                result = super().train(trainer)
-            finally:
-                if validation_worker is not None:
-                    validation_worker.close()
+            result = super().train(trainer)
             final = Path(native['output_dir']) / 'final'
             trainer.save_model(str(final))
             if trainer.is_world_process_zero():

@@ -144,7 +144,7 @@ print(ROOT)
 
         def stream_run(command, check=True):
             commands.append(command)
-            if command[2] == 'mmcultureqa.export':
+            if command[2] in ('mmcultureqa.export', 'mmcultureqa.select_checkpoint'):
                 merged_fixture(Path(command[command.index('--run-dir') + 1]) / 'best_model')
                 return subprocess.CompletedProcess(command, 0)
             self.assertTrue(Path(command[command.index('--config') + 1]).is_absolute())
@@ -171,7 +171,9 @@ print(ROOT)
     def test_training_uses_absolute_configs_outputs_and_adapter(self):
         ns, commands, copies = self.experiment()
         exec(find_cell('02_sft_colab', 'SFT_OVERRIDES ='), ns)
-        self.assertEqual([c[2] for c in commands], ['mmcultureqa.training.sft', 'mmcultureqa.export'])
+        self.assertEqual([c[2] for c in commands], ['mmcultureqa.training.sft'])
+        exec(find_cell('02_sft_colab', 'mmcultureqa.select_checkpoint'), ns)
+        self.assertEqual(commands[-1][2], 'mmcultureqa.select_checkpoint')
         self.assertTrue((Path(ns['SFT']) / 'best_model/model.safetensors').is_file())
         self.assertTrue(all(Path(source).is_absolute() for source, dest in copies if dest.startswith('remote:')))
         from mmcultureqa.storage import upload_filters
@@ -378,8 +380,10 @@ print(ROOT)
         self.assertNotIn('quant_bits', args)
         self.assertFalse(args['predict_with_generate'])
         self.assertIsNone(args['metric'])
-        self.assertEqual(args['metric_for_best_model'], 'bertscore_f1')
-        self.assertTrue(args['greater_is_better'])
+        self.assertEqual(args['metric_for_best_model'], 'loss')
+        self.assertFalse(args['greater_is_better'])
+        self.assertIsNone(args['save_total_limit'])
+        self.assertFalse(args['load_best_model_at_end'])
         self.assertEqual(args['num_train_epochs'], 1)
         self.assertEqual(args['learning_rate'], 5e-5)
         self.assertEqual(args['eval_steps'], 125)
@@ -391,8 +395,8 @@ print(ROOT)
         cfg['training']['predict_with_generate'] = False
         teacher_forced = build_arguments(cfg, 'sft')
         self.assertIsNone(teacher_forced['metric'])
-        self.assertEqual(teacher_forced['metric_for_best_model'], 'bertscore_f1')
-        self.assertTrue(teacher_forced['greater_is_better'])
+        self.assertEqual(teacher_forced['metric_for_best_model'], 'loss')
+        self.assertFalse(teacher_forced['greater_is_better'])
 
     def test_grpo_checks_eval_grouping_after_overrides(self):
         cfg = self.grpo_config()
@@ -515,6 +519,17 @@ print(ROOT)
         (adapter / 'adapter_model.safetensors').write_bytes(b'different-adapter')
         with self.assertRaisesRegex(FileExistsError, 'different adapter'):
             export_merged(run)
+        checkpoint = run / 'checkpoint-125'
+        checkpoint.mkdir()
+        (checkpoint / 'adapter_config.json').write_text('{"r":16}')
+        (checkpoint / 'adapter_model.safetensors').write_bytes(b'checkpoint-specific-weights')
+        candidate = run / 'candidates/checkpoint-125/best_model'
+        with patch.dict(sys.modules, libraries):
+            self.assertEqual(export_merged(run, adapter_dir=checkpoint, output_dir=candidate), candidate)
+        self.assertEqual(adapter_factory.call_args.args[1], str(checkpoint))
+        self.assertEqual(processor_factory.call_args.args[0], str(run / 'final'))
+        self.assertEqual(require_merged_model(candidate), candidate)
+
 
     def test_merged_model_loader_uses_local_bf16_without_adapter_or_hub_fallback(self):
         cfg = self.grpo_config()
@@ -816,7 +831,7 @@ print(ROOT)
             args = build_arguments(cfg, 'sft')
             self.assertTrue(args['eval_on_start'])
             self.assertNotIn('quant_bits', args)
-            self.assertEqual(args['metric_for_best_model'], 'bertscore_f1')
+            self.assertEqual(args['metric_for_best_model'], 'loss')
             self.assertEqual(args['per_device_train_batch_size'] * args['gradient_accumulation_steps'], 8)
 
     def test_active_notebook_set_has_only_two_qwen_sft_models(self):
@@ -961,6 +976,56 @@ print(ROOT)
             factory.assert_called_once()
         self.assertEqual(events, ['generate-and-sleep', 'ack', 'generate-and-sleep', 'ack', 'close'])
         connection.close.assert_called_once()
+
+    def test_post_training_selection_merges_every_checkpoint_and_keeps_best_f1(self):
+        self.grpo_config()
+        from mmcultureqa.common import config
+        from mmcultureqa.select_checkpoint import select_checkpoint
+        with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft.yaml')]):
+            cfg = config()
+        cfg['prompt_text'] = 'Question: {question}'
+        run = self.project / 'outputs/selection-run'
+        run.mkdir(parents=True)
+        (run / 'run.json').write_text(json.dumps(cfg))
+        for step in (125, 250, 375):
+            cp = run / f'checkpoint-{step}'
+            cp.mkdir()
+            (cp / 'adapter_config.json').write_text('{}')
+            (cp / 'adapter_model.safetensors').write_bytes(str(step).encode())
+        events = []
+        def process(cmd, **kwargs):
+            module = cmd[3]
+            folder = Path(cmd[cmd.index('--run-dir') + 1])
+            if module == 'mmcultureqa.export':
+                adapter = Path(cmd[cmd.index('--adapter') + 1])
+                events.append(('merge', adapter.name))
+                destination = Path(cmd[cmd.index('--output') + 1]) if '--output' in cmd else run / 'best_model'
+                self.assertFalse(list((run / 'checkpoint_selection').glob('*/best_model')))
+                merged_fixture(destination)
+            elif module == 'mmcultureqa.evaluate':
+                events.append(('score', folder.name))
+                self.assertEqual(cmd[-2:], ['--backend', 'vllm'])
+                report = folder / 'validation'
+                report.mkdir()
+                value = {'checkpoint-125': 0.81, 'checkpoint-250': 0.89, 'checkpoint-375': 0.85}[folder.name]
+                (report / 'scores.json').write_text(json.dumps({'result': [{'en': {'BERTScore-F1': value}}]}))
+                (report / 'evaluation.json').write_text(json.dumps(dict(full_validation=True,
+                    evaluated_rows=1, model_artifact='merged_bf16')))
+            else:
+                self.fail(module)
+        with patch('mmcultureqa.select_checkpoint.subprocess.run', side_effect=process):
+            selection = select_checkpoint(run)
+            self.assertEqual(Path(selection['best_model_checkpoint']).name, 'checkpoint-250')
+            self.assertEqual(selection['best_metric'], 0.89)
+            self.assertTrue((run / 'best_model/model.safetensors').is_file())
+            self.assertFalse(list((run / 'checkpoint_selection').glob('*/best_model')))
+            self.assertEqual(len(list(run.glob('checkpoint-*'))), 3)
+            self.assertEqual(events, [('merge', 'checkpoint-125'), ('score', 'checkpoint-125'),
+                ('merge', 'checkpoint-250'), ('score', 'checkpoint-250'),
+                ('merge', 'checkpoint-375'), ('score', 'checkpoint-375'), ('merge', 'checkpoint-250')])
+            events.clear()
+            select_checkpoint(run)
+            self.assertEqual(events, [('merge', 'checkpoint-250')])
 
     def test_cpu_swap_restores_devices_after_failed_generation(self):
         sys.path.insert(0, str(self.project / 'src'))
@@ -1219,13 +1284,13 @@ print(ROOT)
             build_comparison(run)
 
 
-    def test_active_sft_notebooks_generate_final_validation_with_vllm(self):
+    def test_active_sft_notebooks_select_merged_checkpoints_after_training(self):
         for notebook in ('02_sft_colab', '05_sft_qwen3vl8b_colab'):
             ns, commands, _ = self.experiment(notebook)
-            ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
-            exec(find_cell(notebook, 'VAL_LIMIT ='), ns)
-            self.assertEqual(commands[0][-2:], ['--backend', 'vllm'])
-        self.assertEqual(ns['RUN_NAME'], 'experiment05_qwen3vl8b')
+            exec(find_cell(notebook, 'SFT_OVERRIDES ='), ns)
+            self.assertNotIn('mmcultureqa.export', find_cell(notebook, 'SFT_OVERRIDES ='))
+            exec(find_cell(notebook, 'mmcultureqa.select_checkpoint'), ns)
+            self.assertEqual(commands[-1][2], 'mmcultureqa.select_checkpoint')
 
 
     def test_teacher_and_student_smoke_use_100_seed42_training_rows(self):

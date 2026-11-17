@@ -9,10 +9,10 @@ from .common import path
 from .models.artifacts import require_merged_model
 
 
-def export_merged(run_dir, device='cuda:0'):
+def export_merged(run_dir, device='cuda:0', adapter_dir=None, output_dir=None):
     run = path(run_dir).resolve()
     cfg = json.loads((run / 'run.json').read_text(encoding='utf-8'))
-    adapter = run / 'final'
+    adapter = path(adapter_dir).resolve() if adapter_dir is not None else run / 'final'
     weights = [adapter / name for name in ('adapter_model.safetensors', 'adapter_model.bin')
                if (adapter / name).is_file()]
     if not weights or not (adapter / 'adapter_config.json').is_file():
@@ -25,7 +25,8 @@ def export_merged(run_dir, device='cuda:0'):
                 'prompt_sha256': hashlib.sha256(cfg['prompt_text'].encode()).hexdigest(),
                 'system_prompt': cfg.get('system_prompt')}
     signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    destination = run / 'best_model'
+    destination = path(output_dir).resolve() if output_dir is not None else run / 'best_model'
+    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         require_merged_model(destination)
         previous = json.loads((destination / 'merge.json').read_text(encoding='utf-8'))
@@ -49,7 +50,9 @@ def export_merged(run_dir, device='cuda:0'):
         attn_implementation=mc.get('attn_implementation', 'sdpa'))
     if getattr(model, 'is_loaded_in_4bit', False) or getattr(model, 'is_loaded_in_8bit', False):
         raise ValueError('Refusing to export from a quantized base')
-    processor = AutoProcessor.from_pretrained(str(adapter), local_files_only=True)
+    processor_source = (adapter if all((adapter / name).is_file() for name in
+                                     ('preprocessor_config.json', 'tokenizer_config.json')) else run / 'final')
+    processor = AutoProcessor.from_pretrained(str(processor_source), local_files_only=True)
     peft_model = PeftModel.from_pretrained(model, str(adapter), is_trainable=False)
     merged = peft_model.merge_and_unload(safe_merge=True)
     merged.to(dtype=torch.bfloat16)
@@ -57,9 +60,9 @@ def export_merged(run_dir, device='cuda:0'):
     selection_file = run / 'selection.json'
     selection = json.loads(selection_file.read_text(encoding='utf-8')) if selection_file.is_file() else {}
     report = {**identity, 'signature': signature, 'selection': selection,
-              'note': 'Selected during NF4 training; merged into the original BF16 base; score this export separately.'}
+              'note': 'Adapter merged into the original BF16 base; validation scores apply to this merged export.'}
     # Publish only a complete model; interrupted exports never masquerade as best_model.
-    with tempfile.TemporaryDirectory(prefix='.merge-', dir=run) as temporary:
+    with tempfile.TemporaryDirectory(prefix='.merge-', dir=destination.parent) as temporary:
         staged = Path(temporary) / 'best_model'
         merged.save_pretrained(str(staged), safe_serialization=True, max_shard_size='2GB')
         processor.save_pretrained(str(staged))
@@ -75,8 +78,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run-dir', required=True)
     parser.add_argument('--device', default='cuda:0')
+    parser.add_argument('--adapter', default=None)
+    parser.add_argument('--output', default=None)
     args = parser.parse_args()
-    print(f'Merged BF16 model: {export_merged(args.run_dir, args.device)}', flush=True)
+    print(f'Merged BF16 model: {export_merged(args.run_dir, args.device, args.adapter, args.output)}', flush=True)
 
 
 if __name__ == '__main__':

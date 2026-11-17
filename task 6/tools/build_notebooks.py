@@ -296,12 +296,12 @@ def experiment03_profile(cells, inference=False):
         elif source.startswith('## Experiment settings'):
             cell = md('''## Experiment 03 settings
 SFT trains BF16 LoRA with microbatch 8 and accumulation 1.
-Validation logs loss/token accuracy and vLLM-generated F1; F1 selects the best checkpoint.
-Training model and optimizer move to RAM while generation and scoring run sequentially on GPU.
-Startup preflight tests 2 images with 2 LoRA snapshots and sleep/wake BEFORE full validation.
-One persistent vLLM worker loads the base once; each eval uses a fresh LoRA snapshot/ID.
-The engine sleeps in RAM between evaluations. CPU weight offload during generation is disabled.
-BF16 8B training may require more VRAM than an L4; sufficient host RAM is also required.
+Training logs loss/token accuracy only; it NEVER starts vLLM or mmBERT.
+Retain every checkpoint. After training exits, merge each checkpoint and generate full validation.
+Selection uses the same merged-model vLLM path/settings as notebook 04, with CUDA graphs enabled.
+No runtime LoRA, sleep/wake or CPU weight offload during generation.
+Only one temporary merged candidate is kept at a time; export the F1 winner at the end.
+BF16 8B training may require more VRAM than an L4.
 Default 1 epoch, peak learning rate 5e-5 (3% warmup), eval/save every 125 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
@@ -313,16 +313,17 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 
 
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
-BF16 LoRA with sequential vLLM validation F1 and teacher-forced loss/token accuracy, including step 0.
+BF16 LoRA; training uses teacher-forced loss/token accuracy only. No vLLM during training.
 BF16 base; microbatch 8 x accumulation 1 preserves effective batch 8 on one GPU.
-Periodic validation: ALL validation questions (1,000), every 125 steps.
-Full training runs 1 epoch and selects the highest generated validation F1 checkpoint.
+Save every 125 steps; retain ALL checkpoints. Periodic loss/token accuracy uses full validation.
+After 1 training epoch, merge and score each checkpoint on all 1,000 validation questions.
+Select the highest merged-model F1, then export that winner as best_model/.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
-Keep TRAIN_PROJECTOR=False with periodic vLLM adapter validation; ViT stays frozen.
+ViT stays frozen; final inference uses a merged model without runtime LoRA.
 best_model/ is a complete BF16 checkpoint, not a 4-bit checkpoint or a standalone adapter.
 Edit SFT_OVERRIDES for prompt and training parameters. Resume uses a full LOCAL checkpoint.
 Automatic uploads contain no resume state.
-'''), code('''TRAIN_PROJECTOR = False  # Required for periodic vLLM language-adapter evaluation
+'''), code('''TRAIN_PROJECTOR = False  # Optional projector LoRA; all trained modules merge before generation
 BASE_MODEL_RUN_NAME = ''  # empty: original Qwen; otherwise start a NEW adapter on that run's merged SFT model
 SFT_OVERRIDES = {}  # optional native project config overrides
 RESUME_CHECKPOINT = ''  # local checkpoint-N; final/ is not a resumable checkpoint
@@ -354,11 +355,12 @@ if RESUME_CHECKPOINT:
 sft_args.update(SFT_OVERRIDES)
 run_command('mmcultureqa.training.sft', 'configs/sft.yaml', sft_args)
 require_adapter(Path(SFT) / 'final')
-# The training process has exited, releasing the 4-bit model before BF16 export.
-stream_run([sys.executable, '-m', 'mmcultureqa.export', '--run-dir', SFT])
+print('Training finished; all checkpoints remain local for merged-model F1 selection.')
+'''), code('''# Training has exited: merge and score ALL saved checkpoints sequentially.
+# Completed candidate scores are reused if this cell is interrupted and rerun.
+stream_run([sys.executable, '-m', 'mmcultureqa.select_checkpoint', '--run-dir', SFT])
 require_merged_model(Path(SFT) / 'best_model')
 upload_run(SFT, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
-'''), code('''require_merged_model(Path(SFT) / 'best_model')
 print('Merged BF16 model on Drive:', cloud(f'task6-runs/{RUN_NAME}/{SFT_STAGE}/best_model'))
 print('Notebook 04: select the same ROOT_FOLDER_ID, INPUT_RUN_NAME and MODEL_STAGE.')
 ''')]
@@ -455,7 +457,7 @@ upload_run(local_run, f'task6-runs/{RUN_NAME}/{__STAGE__}')
 
 
 sft_notebook += learning_curves('SFT', 'SFT_STAGE', 'sft')
-sft_notebook += final_validation('SFT', 'SFT_STAGE', merged=True)
+sft_notebook += [code("print((Path(SFT) / 'selection.json').read_text(encoding='utf-8'))\nprint((Path(SFT) / 'validation/scores.json').read_text(encoding='utf-8'))\n")]
 grpo_notebook += learning_curves('GRPO', 'GRPO_STAGE', 'grpo')
 grpo_notebook += final_validation('GRPO', 'GRPO_STAGE')
 

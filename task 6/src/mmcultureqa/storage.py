@@ -15,6 +15,7 @@ def upload_filters(kind):
             '+ /logging.jsonl',
             '+ /trainer_state.json',
             '+ /learning_curves.png',
+            '+ /checkpoint_selection/ranking.json',
             '+ /prompt_comparison.json',
             '+ /prompt_comparison.csv',
             '+ /prompt_comparison.html',
