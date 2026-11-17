@@ -53,13 +53,20 @@ def assistant_target(row):
     return f'<answer>{answer}</answer>'
 
 
-def final_answer(text):
+def final_answer(text, require_think=True):
+    if not require_think:
+        headings = list(re.finditer(r'^\s*(?:\*\*)?Final answer\s*:(?:\*\*)?\s*', text, re.MULTILINE | re.IGNORECASE))
+        if headings:
+            answer = text[headings[0].end():].strip()
+            if len(headings) != 1 or not answer or re.search(r'</?(?:think|answer)>', answer):
+                raise ValueError('Missing or ambiguous Final answer; inspect the trace')
+            return answer
     matches = list(re.finditer(r'<answer>\s*(.*?)\s*</answer>', text, re.DOTALL))
     if len(matches) != 1 or not matches[0].group(1).strip():
         raise ValueError('Missing or ambiguous final <answer>; increase generation budget or inspect the trace')
     match = matches[0]
     prefix, suffix = text[:match.start()].strip(), text[match.end():].strip()
-    if not prefix.startswith('<think>') or not prefix.endswith('</think>') or suffix:
+    if (require_think and (not prefix.startswith('<think>') or not prefix.endswith('</think>'))) or suffix:
         raise ValueError('Incomplete reasoning/answer format; inspect the trace')
     answer = match.group(1).strip()
     if '<think>' in answer or '</think>' in answer:

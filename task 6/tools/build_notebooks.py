@@ -595,9 +595,9 @@ load_reasoned_train(check_cfg, read_jsonl(PROJECT_ROOT / 'data/prepared/train.js
 
 # Add only to the baseline SFT notebook; notebook 06 already trains on reasoning targets.
 sft_notebook += [md('''## Zero-shot CoT validation on the same SFT checkpoint
-After the direct-answer validation above, run the agreed four-step CoT prompt on the SAME held-out rows.
+After the direct-answer validation above, run the short, free-form CoT prompt on the SAME held-out rows.
 Uses the same merged BF16 model and vLLM; training and checkpoint selection do not change.
-Only <answer> is scored. Raw reasoning and format errors are saved separately; invalid outputs
+Only the final answer following Final answer: is scored. Raw reasoning and format errors are saved separately; invalid outputs
 retry once with sampling; a second format failure stops validation with an explicit error.
 Both primary passes use greedy decoding; a CoT format retry uses sampling (temperature 0.7, seed +1).
 CoT has a larger generation budget, shown in the comparison report.

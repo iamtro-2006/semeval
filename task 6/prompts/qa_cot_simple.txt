@@ -2,4 +2,4 @@ Question: {question}
 
 Let's think step by step, using the image and relevant cultural knowledge to give an accurate and culturally aware answer.
 
-Write your reasoning in <think>...</think> and your final answer in English in <answer>...</answer>.
+After your reasoning, write "Final answer:" followed by a complete answer in English that addresses every part of the question.

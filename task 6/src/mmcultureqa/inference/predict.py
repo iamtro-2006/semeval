@@ -93,7 +93,7 @@ def main():
                         record = {'id': row['id'], 'generation': answer, 'attempt': attempt + 1}
                         error = None
                         try:
-                            answer = final_answer(answer)
+                            answer = final_answer(answer, require_think=ic.get('prompt_mode') != 'cot')
                         except ValueError as exc:
                             error = exc
                             record['format_error'] = str(exc)

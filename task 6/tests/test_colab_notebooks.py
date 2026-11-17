@@ -632,7 +632,7 @@ print(ROOT)
         self.assertEqual(cot['inference']['max_new_tokens'], 1024)
         self.assertEqual(cot['inference']['on_format_error'], 'raise')
         self.assertEqual(cot['inference']['format_retries'], 1)
-        self.assertIn('not watermark text', Path(cot['inference']['prompt_file']).read_text(encoding='utf-8'))
+        self.assertIn('Final answer:', Path(cot['inference']['prompt_file']).read_text(encoding='utf-8'))
         cot_report = json.loads((run / 'validation_cot/evaluation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['gold_sha256'], cot_report['gold_sha256'])
         self.assertEqual(report['model_signature'], cot_report['model_signature'])
@@ -787,6 +787,15 @@ print(ROOT)
     def test_reasoning_parsers_reject_truncation_and_ambiguous_answers(self):
         sys.path.insert(0, str(self.project / 'src'))
         from mmcultureqa.data.distillation import parse_teacher, final_answer
+        plain = 'Step 1: Identify the airline.\nStep 2: Interpret the branding.\n\nFinal answer: Kuwait Airways; its design represents national identity.'
+        self.assertEqual(final_answer(plain, require_think=False), 'Kuwait Airways; its design represents national identity.')
+        self.assertEqual(final_answer('Step 1: Reasoning.\n<answer>Complete answer.</answer>', require_think=False), 'Complete answer.')
+        for invalid in ('Step 1: No conclusion.', 'Step 1: Reasoning.\nFinal answer:',
+                        'Final answer: One.\nFinal answer: Two.'):
+            with self.assertRaises(ValueError):
+                final_answer(invalid, require_think=False)
+        with self.assertRaises(ValueError):
+            final_answer(plain)
         for text, finish in [('Thinking without closing tag', 'stop'), ('</think>{}', 'length'),
                              ('</think>{"supported":false}', 'stop'), ('</think>{"supported":true,"steps":[]}', 'stop')]:
             with self.assertRaises(ValueError):
