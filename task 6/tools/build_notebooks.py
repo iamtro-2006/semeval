@@ -302,7 +302,7 @@ Selection uses the same merged-model vLLM path/settings as notebook 04, with CUD
 No runtime LoRA, sleep/wake or CPU weight offload during generation.
 Only one temporary merged candidate is kept at a time; export the F1 winner at the end.
 BF16 8B training may require more VRAM than an L4.
-Default 1 epoch, peak learning rate 2e-4 (3% warmup), label smoothing 0.005, eval/save every 125 optimizer steps.
+Default 1.2 epochs, peak learning rate 2e-4 (3% warmup), label smoothing 0.005, eval every 125 steps; save every 225 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
@@ -315,8 +315,8 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
 BF16 LoRA; training uses teacher-forced loss/token accuracy only. No vLLM during training.
 BF16 base; microbatch 8 x accumulation 1 preserves effective batch 8 on one GPU.
-Save every 125 steps; retain ALL checkpoints. Periodic loss/token accuracy uses full validation.
-After 1 training epoch, merge and score each checkpoint on all 1,000 validation questions.
+Save every 225 steps (6 checkpoints over 1350 steps); retain ALL checkpoints. Periodic loss/token accuracy uses full validation.
+After 1.2 training epochs, merge and score each checkpoint on all 1,000 validation questions.
 Select the highest merged-model F1, then export that winner as best_model/.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
 ViT stays frozen; final inference uses a merged model without runtime LoRA.

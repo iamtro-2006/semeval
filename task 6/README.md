@@ -22,8 +22,8 @@ All project paths resolve under /content/semeval/task 6 on Colab.
 
 BF16 frozen base + language LoRA (not NF4): r=16, alpha=32, dropout=0.05, attention q/k/v/o
 and MLP gate/up/down. Microbatch 8, accumulation 1, effective batch 8 on one GPU.
-One epoch, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.005.
-Save/eval every 125 optimizer steps. SFT_OVERRIDES can change these explicitly.
+1.2 epochs, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.005.
+Save every 225 optimizer steps; evaluate loss every 125 steps. SFT_OVERRIDES can change these explicitly.
 During training, full validation computes loss/token accuracy at step 0 and every 125 steps.
 There is NO vLLM, generation F1, scorer, sleep/wake or CPU model swapping during SFT.
 All checkpoints are retained (save_total_limit=null); the trainer does not restore a provisional best.
@@ -35,9 +35,11 @@ User prompt (prompts/qa.txt):
 ```text
 Question: {question}
 
-Examine the image and connect the relevant visual details and readable text with the cultural or historical knowledge needed to answer the question.
+Use the image together with your cultural and historical knowledge to answer the question. Focus on relevant objects, distinctive features, their arrangement and relationships, and readable text (excluding watermarks). Consider how these details help identify the subject and understand its context.
 
-Give a direct, accurate, culturally grounded answer in English. Address every part of the question, including the specific names, features, uses, or significance requested.
+When the subject or its meaning is ambiguous, compare plausible interpretations and determine which is best supported by the image and the question. Give specific names and explanations where possible, and acknowledge uncertainty when the available details are insufficient.
+
+Provide a complete, accurate, culturally grounded answer in English. Address every part of the question, including any requested identification, description, purpose, or cultural significance. Support your answer with relevant details and keep the explanation focused on what the question asks.
 ```
 
 The native framework label smoother is retained with next-token shifting explicitly enabled for
@@ -49,7 +51,7 @@ Val loss with label smoothing is not directly comparable with prior unsmoothed v
 The training cell finishes and its process exits, releasing the training model and optimizer.
 The next cell calls `python -m mmcultureqa.select_checkpoint --run-dir <SFT>`:
 
-1. Enumerate every local checkpoint-N in numeric order (normally 9 checkpoints / 1125 steps).
+1. Enumerate every local checkpoint-N in numeric order (normally 6 checkpoints / 1350 steps).
 2. Reload the original BF16 base and safe-merge that candidate adapter into a temporary model.
 3. Exit the merge process. Generate ALL 1000 validation answers using the complete merged model.
 4. Exit generation. Load mmBERT separately and score with the unchanged organizer scorer.

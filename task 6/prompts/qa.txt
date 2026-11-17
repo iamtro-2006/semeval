@@ -1,5 +1,7 @@
 Question: {question}
 
-Examine the image and connect the relevant visual details and readable text with the cultural or historical knowledge needed to answer the question.
+Use the image together with your cultural and historical knowledge to answer the question. Focus on relevant objects, distinctive features, their arrangement and relationships, and readable text (excluding watermarks). Consider how these details help identify the subject and understand its context.
 
-Give a direct, accurate, culturally grounded answer in English. Address every part of the question, including the specific names, features, uses, or significance requested.
+When the subject or its meaning is ambiguous, compare plausible interpretations and determine which is best supported by the image and the question. Give specific names and explanations where possible, and acknowledge uncertainty when the available details are insufficient.
+
+Provide a complete, accurate, culturally grounded answer in English. Address every part of the question, including any requested identification, description, purpose, or cultural significance. Support your answer with relevant details and keep the explanation focused on what the question asks.

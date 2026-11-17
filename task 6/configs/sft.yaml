@@ -27,7 +27,7 @@ peft:
 training:
   eval_on_start: true
   output_dir: outputs/runs/experiment03/sft
-  num_train_epochs: 1
+  num_train_epochs: 1.2
   learning_rate: 0.0002
   label_smoothing_factor: 0.005
   per_device_train_batch_size: 8
@@ -43,7 +43,7 @@ training:
   logging_steps: 5
   eval_strategy: steps
   eval_steps: 125
-  save_steps: 125
+  save_steps: 225
   save_total_limit: null  # retain every checkpoint for post-training merged-model selection
   load_best_model_at_end: false
   metric_for_best_model: eval_loss
