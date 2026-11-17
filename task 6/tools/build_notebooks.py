@@ -300,7 +300,7 @@ Validation logs loss/token accuracy and vLLM-generated F1; F1 selects the best c
 Training model and optimizer move to RAM while generation and scoring run sequentially on GPU.
 Each eval recreates vLLM; this is process isolation, not a persistent sleep-mode engine.
 BF16 8B training may require more VRAM than an L4; sufficient host RAM is also required.
-Default 1 epoch, peak learning rate 5e-5 (3% warmup), eval/save every 170 optimizer steps.
+Default 1 epoch, peak learning rate 5e-5 (3% warmup), eval/save every 125 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
@@ -313,7 +313,7 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
 BF16 LoRA with sequential vLLM validation F1 and teacher-forced loss/token accuracy, including step 0.
 BF16 base; microbatch 8 x accumulation 1 preserves effective batch 8 on one GPU.
-Periodic validation: ALL validation questions (1,000), every 170 steps.
+Periodic validation: ALL validation questions (1,000), every 125 steps.
 Full training runs 1 epoch and selects the highest generated validation F1 checkpoint.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
 Keep TRAIN_PROJECTOR=False with periodic vLLM adapter validation; ViT stays frozen.
@@ -379,7 +379,7 @@ Single GPU default: train microbatch 4, accumulation 4, rollout 16 completions (
 Keep 4 completions/question and the same mmBERT-F1 reward. No model/optimizer offload or vLLM sleep.
 If GPU memory is insufficient, try train batch 2 and eval batch 4 in GRPO_OVERRIDES.
 Use a new RUN_NAME for this recipe; SFT_RUN_NAME separately selects the existing SFT adapter.
-Full GRPO training defaults to 1 epoch, with validation and checkpoint saving every 170 optimizer steps.
+Full GRPO training defaults to 1 epoch, with validation and checkpoint saving every 125 optimizer steps.
 Validation rollouts are enabled independently of the SFT flag. Increasing epochs preserves best selection.
 Select the highest validation reward checkpoint and export it as final/. Inspect
 eval_rewards/MMCQABERTScore/mean for raw mmBERT F1 (sampled responses, not teacher-forced accuracy).

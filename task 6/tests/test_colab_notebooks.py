@@ -361,7 +361,7 @@ print(ROOT)
         self.assertEqual(records[0]['solution'], 'train-gold')
         self.assertNotIn('train-gold', json.dumps(records[0]['messages']))
 
-    def test_native_sft_selects_generated_f1_every_170_steps(self):
+    def test_native_sft_selects_generated_f1_every_125_steps(self):
         self.grpo_config()  # create disjoint train/validation fixture manifests
         from mmcultureqa.common import config
         from mmcultureqa.training.swift_backend import build_arguments
@@ -382,8 +382,8 @@ print(ROOT)
         self.assertTrue(args['greater_is_better'])
         self.assertEqual(args['num_train_epochs'], 1)
         self.assertEqual(args['learning_rate'], 5e-5)
-        self.assertEqual(args['eval_steps'], 170)
-        self.assertEqual(args['save_steps'], 170)
+        self.assertEqual(args['eval_steps'], 125)
+        self.assertEqual(args['save_steps'], 125)
         self.assertEqual(args['per_device_train_batch_size'], 8)
         self.assertEqual(args['gradient_accumulation_steps'], 1)
         self.assertEqual(args['per_device_train_batch_size'] * args['gradient_accumulation_steps'], 8)
