@@ -234,6 +234,8 @@ def train(cfg, stage):
             cfg['_projector_trainable_parameters'] = projector_params
             provenance(cfg, native['output_dir'])
             try:
+                if validation_worker is not None:
+                    validation_worker.preflight()
                 result = super().train(trainer)
             finally:
                 if validation_worker is not None:

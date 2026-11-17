@@ -298,6 +298,7 @@ def experiment03_profile(cells, inference=False):
 SFT trains BF16 LoRA with microbatch 8 and accumulation 1.
 Validation logs loss/token accuracy and vLLM-generated F1; F1 selects the best checkpoint.
 Training model and optimizer move to RAM while generation and scoring run sequentially on GPU.
+Startup preflight tests 2 images with 2 LoRA snapshots and sleep/wake BEFORE full validation.
 One persistent vLLM worker loads the base once; each eval uses a fresh LoRA snapshot/ID.
 The engine sleeps in RAM between evaluations. CPU weight offload during generation is disabled.
 BF16 8B training may require more VRAM than an L4; sufficient host RAM is also required.

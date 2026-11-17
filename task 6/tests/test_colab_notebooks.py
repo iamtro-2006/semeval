@@ -868,10 +868,12 @@ print(ROOT)
              patch('mmcultureqa.training.vllm_validation.subprocess.run', side_effect=child), \
              patch('mmcultureqa.training.vllm_validation.PersistentValidationWorker') as worker:
             worker.return_value.predict.side_effect = generate
-            install_validation(trainer, cfg, processor)
+            controller = install_validation(trainer, cfg, processor)
+            controller.preflight()
             metrics = trainer.evaluate()
         self.assertEqual(metrics, {'eval_loss': 0.8, 'eval_bertscore_f1': 0.87})
-        self.assertEqual(events[:4], ['offload', 'generate', 'score', 'restore'])
+        self.assertEqual(events[:4], ['offload', 'generate', 'generate', 'restore'])
+        self.assertEqual(events[4:8], ['offload', 'generate', 'score', 'restore'])
 
     def test_persistent_vllm_reuses_base_and_refreshes_lora_then_sleeps(self):
         self.grpo_config()
@@ -1045,6 +1047,45 @@ print(ROOT)
         self.assertEqual(request_config.call_args.kwargs['presence_penalty'], 1.5)
         self.assertEqual(request_config.call_args.kwargs['top_p'], 0.8)
 
+
+    def test_upstream_qwen3_mapping_backport_excludes_vision_before_lora_profile(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        class Mapping:
+            @staticmethod
+            def from_string_field(**kwargs):
+                return SimpleNamespace(**{k: [v] for k, v in kwargs.items()})
+        class Model:
+            # Exact faulty metadata shipped in vLLM 0.11.0 (upstream PR #27027).
+            def get_mm_mapping(self):
+                return Mapping.from_string_field(language_model='language_model',
+                    connector='model.visual.merger', tower_model='model.visual.')
+        names = ['visual.blocks.0.attn.proj', 'visual.merger.linear_fc1',
+                 'language_model.model.layers.0.self_attn.qkv_proj']
+        class BaseWorker:
+            def load_model(self):
+                mapping = Model().get_mm_mapping()
+                prefixes = mapping.connector + mapping.tower_model
+                # v0.11.0 LoRAModelManager filters using startswith on these prefixes.
+                modules = {n: object() for n in names if not any(n.startswith(p) for p in prefixes)}
+                self.model_runner = SimpleNamespace(model=SimpleNamespace(
+                    lora_manager=SimpleNamespace(modules=modules)))
+        original = Model().get_mm_mapping()
+        self.assertFalse(names[0].startswith(original.tower_model[0]))
+        modules = {
+            'vllm.v1.worker.gpu_worker': SimpleNamespace(Worker=BaseWorker),
+            'vllm.model_executor.models.qwen3_vl': SimpleNamespace(Qwen3VLForConditionalGeneration=Model),
+            'vllm.model_executor.models.module_mapping': SimpleNamespace(MultiModelKeys=Mapping),
+        }
+        with patch.dict(sys.modules, modules):
+            from mmcultureqa.models.vllm_qwen3_worker import Qwen3LanguageLoRAWorker, audit_language_only_lora
+            worker = Qwen3LanguageLoRAWorker()
+            worker.vllm_config = SimpleNamespace(lora_config=object())
+            worker.load_model()
+            self.assertEqual(list(worker.model_runner.model.lora_manager.modules), [names[2]])
+            audit_language_only_lora(worker.model_runner.model)
+            worker.model_runner.model.lora_manager.modules[names[0]] = object()
+            with self.assertRaisesRegex(RuntimeError, 'vision encoder'):
+                audit_language_only_lora(worker.model_runner.model)
 
     def test_persistent_loader_enables_sleep_and_requires_explicit_lora(self):
         cfg = self.grpo_config()

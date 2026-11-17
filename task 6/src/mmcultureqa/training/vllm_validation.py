@@ -68,35 +68,61 @@ def install_validation(trainer, cfg, processor):
     original = trainer.evaluate
     worker = PersistentValidationWorker()
 
+    def snapshot(self, work, sample_limit=None):
+        from .swift_backend import canonical_adapter
+        adapter = work / 'adapter'
+        self.save_model(str(adapter))
+        processor.save_pretrained(adapter)
+        canonical_adapter(adapter, cfg['model']['name'])
+        validation = read_jsonl(path(cfg['data']['manifest_dir']) / 'validation.jsonl')
+        limit = cfg['monitor'].get('limit')
+        if limit is not None and limit < len(validation):
+            import random
+            validation = random.Random(42).sample(validation, limit)
+        if sample_limit is not None:
+            validation = validation[:sample_limit]
+        write_jsonl(work / 'validation.jsonl', validation)
+        child = copy.deepcopy(cfg)
+        child.pop('extends', None)
+        child['data'].update(manifest_dir=str(work), limit=None)
+        child['model'].update(adapter=str(adapter), adapter_revision=None, merged_model=False,
+                              load_in_4bit=False)
+        (work / 'prompt.txt').write_text(path(cfg['prompt_file']).read_text(encoding='utf-8'), encoding='utf-8')
+        child['prompt_file'] = str(work / 'prompt.txt')
+        child['inference'] = dict(backend='vllm', split='validation', batch_size=8,
+            max_new_tokens=cfg['monitor']['max_new_tokens'], do_sample=False, resume=False,
+            output=str(work / 'predictions.jsonl'), **cfg['monitor'].get('vllm', {}))
+        config = work / 'config.json'
+        config.write_text(json.dumps(child, ensure_ascii=False), encoding='utf-8')
+        return config, validation
+
+    def preflight():
+        # Exercise the exact base + LoRA image path twice BEFORE any full validation pass.
+        # The engine survives this test and is reused for the full training run.
+        print('[validation] Preflight: 2 images x 2 snapshots, including sleep/wake', flush=True)
+        with tempfile.TemporaryDirectory(prefix='mmcqa-preflight-', dir=path(cfg['training']['output_dir'])) as root:
+            with training_on_cpu(trainer):
+                try:
+                    for index in range(2):
+                        work = Path(root) / str(index)
+                        work.mkdir()
+                        config, rows = snapshot(trainer, work, sample_limit=2)
+                        worker.predict(config)
+                        predictions = read_jsonl(work / 'predictions.jsonl')
+                        if len(predictions) != len(rows) or {r['id'] for r in predictions} != {r['id'] for r in rows}:
+                            raise ValueError('vLLM preflight coverage mismatch')
+                except BaseException:
+                    worker.close()
+                    raise
+        print('[validation] Preflight passed; proceeding to full validation/training', flush=True)
+
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix='eval', **kwargs):
         # Native teacher-forced validation retains loss/token accuracy and their progress bar.
         metrics = original(eval_dataset=eval_dataset, ignore_keys=ignore_keys,
                            metric_key_prefix=metric_key_prefix, **kwargs)
-        from .swift_backend import canonical_adapter
         with tempfile.TemporaryDirectory(prefix='mmcqa-val-', dir=path(cfg['training']['output_dir'])) as work:
             work = Path(work)
-            adapter = work / 'adapter'
-            self.save_model(str(adapter))
-            processor.save_pretrained(adapter)
-            canonical_adapter(adapter, cfg['model']['name'])
-            validation = read_jsonl(path(cfg['data']['manifest_dir']) / 'validation.jsonl')
-            limit = cfg['monitor'].get('limit')
-            if limit is not None and limit < len(validation):
-                import random
-                validation = random.Random(42).sample(validation, limit)
-            write_jsonl(work / 'validation.jsonl', validation)
-            child = copy.deepcopy(cfg)
-            child.pop('extends', None)
-            child['data'].update(manifest_dir=str(work), limit=None)
-            child['model'].update(adapter=str(adapter), adapter_revision=None, merged_model=False,
-                                  load_in_4bit=False)
-            (work / 'prompt.txt').write_text(path(cfg['prompt_file']).read_text(encoding='utf-8'), encoding='utf-8')
-            child['prompt_file'] = str(work / 'prompt.txt')
-            child['inference'] = dict(backend='vllm', split='validation', batch_size=8,
-                max_new_tokens=cfg['monitor']['max_new_tokens'], do_sample=False, resume=False,
-                output=str(work / 'predictions.jsonl'), **cfg['monitor'].get('vllm', {}))
-            config = work / 'config.json'
-            config.write_text(json.dumps(child, ensure_ascii=False), encoding='utf-8')
+            config, validation = snapshot(self, work)
             # Worker acknowledges only once generation finishes and vLLM is sleeping in RAM.
             with training_on_cpu(self):
                 try:
@@ -122,4 +148,5 @@ def install_validation(trainer, cfg, processor):
         return metrics
 
     trainer.evaluate = MethodType(evaluate, trainer)
+    worker.preflight = preflight
     return worker

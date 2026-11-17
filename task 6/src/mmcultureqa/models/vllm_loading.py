@@ -36,13 +36,16 @@ def load_vllm(cfg, persistent=False):
             raise ValueError('Adapter base model does not match the configured base model')
         rank = adapter_config['r']
         adapters = [str(adapter)]
+    engine_kwargs = {'cpu_offload_gb': ic.get('vllm_cpu_offload_gb', 0)}
+    if family == 'qwen3_vl' and (persistent or adapters):
+        engine_kwargs['worker_cls'] = 'mmcultureqa.models.vllm_qwen3_worker.Qwen3LanguageLoRAWorker'
     engine = VllmEngine(mc['name'], torch_dtype=getattr(torch, dtype), model_type=family, use_hf=True,
                         revision=mc.get('revision'), adapters=adapters, max_lora_rank=rank,
                         enable_lora=persistent or bool(adapters), enable_sleep_mode=persistent,
                         max_model_len=ic['vllm_max_model_len'], max_num_seqs=ic['vllm_max_num_seqs'],
                         gpu_memory_utilization=ic['vllm_gpu_memory_utilization'],
                         enforce_eager=ic.get('vllm_enforce_eager', False),
-                        engine_kwargs={'cpu_offload_gb': ic.get('vllm_cpu_offload_gb', 0)},
+                        engine_kwargs=engine_kwargs,
                         enable_prefix_caching=True, limit_mm_per_prompt={'image': 1, 'video': 0},
                         seed=cfg['training']['seed'])
     if family == 'qwen3_5':

@@ -34,6 +34,10 @@ accurate answer in English. Followed by Question: {question}.
 
 ## Sequential GPU use for periodic validation
 
+Before full validation, an automatic preflight generates on 2 images with two separate LoRA
+snapshots and a sleep/wake cycle. The same engine is reused afterwards. This is only a
+startup check; periodic/final validation still covers all 1000 examples by default.
+
 1. Run native teacher-forced loss/token accuracy validation.
 2. Save a temporary snapshot of the CURRENT adapter; no held-out answer is fed to the VLM.
 3. Move training parameters, buffers, gradients and optimizer state to host RAM.
@@ -86,3 +90,13 @@ python -m unittest discover -s "task 6/tests" -v
 CPU fixtures/mocks verify argument mapping, notebook execution, subprocess ordering, F1 return,
 error restoration, artifact handling and upload filters. They do not prove GPU fit, throughput
 or score improvements. vLLM sleep-mode reference: https://docs.vllm.ai/en/v0.11.0/features/sleep_mode.html
+
+## Pinned vLLM Qwen3-VL LoRA compatibility
+
+vLLM 0.11.0 incorrectly declares the vision tower prefix as model.visual.* instead of visual.*.
+This can wrap vision layers in LoRA and fail during image profiling with token_lora_mapping
+AssertionError. The custom engine worker applies the dense-model correction from upstream
+PR #27027 BEFORE model loading, then audits the actual LoRA module registry BEFORE profiling.
+It preserves language LoRA, image processing and BF16 weights; no assertion is bypassed and
+no site-packages files are modified. Normal merged-model inference does not enable this worker.
+Source: https://github.com/vllm-project/vllm/pull/27027
