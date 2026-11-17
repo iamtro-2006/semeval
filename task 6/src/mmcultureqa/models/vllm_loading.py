@@ -41,8 +41,8 @@ def load_vllm(cfg, persistent=False):
                         enable_lora=persistent or bool(adapters), enable_sleep_mode=persistent,
                         max_model_len=ic['vllm_max_model_len'], max_num_seqs=ic['vllm_max_num_seqs'],
                         gpu_memory_utilization=ic['vllm_gpu_memory_utilization'],
-                        engine_kwargs={'cpu_offload_gb': ic.get('vllm_cpu_offload_gb', 0),
-                                       'enforce_eager': ic.get('vllm_enforce_eager', False)},
+                        enforce_eager=ic.get('vllm_enforce_eager', False),
+                        engine_kwargs={'cpu_offload_gb': ic.get('vllm_cpu_offload_gb', 0)},
                         enable_prefix_caching=True, limit_mm_per_prompt={'image': 1, 'video': 0},
                         seed=cfg['training']['seed'])
     if family == 'qwen3_5':

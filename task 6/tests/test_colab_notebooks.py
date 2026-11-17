@@ -1051,9 +1051,17 @@ print(ROOT)
         from mmcultureqa.models.vllm_loading import load_vllm
         cfg['model'].update(dtype='bfloat16', load_in_4bit=False, adapter=None)
         cfg['inference'] = dict(max_new_tokens=256, do_sample=False, vllm_max_model_len=2048,
-            vllm_max_num_seqs=2, vllm_gpu_memory_utilization=0.9, vllm_cpu_offload_gb=0)
+            vllm_max_num_seqs=2, vllm_gpu_memory_utilization=0.9, vllm_cpu_offload_gb=0, vllm_enforce_eager=True)
         factory = MagicMock()
         factory.return_value.infer.return_value = []
+        # Swift forwards explicit named arguments and expands engine_kwargs together.
+        # Match that boundary rather than accepting all arguments with a permissive mock.
+        def swift_constructor(model, *, enforce_eager=False, engine_kwargs=None, **kwargs):
+            def prepare(*, enforce_eager=False, **kwargs):
+                self.assertTrue(enforce_eager)
+            prepare(enforce_eager=enforce_eager, **(engine_kwargs or {}))
+            return factory.return_value
+        factory.side_effect = swift_constructor
         modules = {'torch': SimpleNamespace(bfloat16='bf16', cuda=SimpleNamespace(
             is_available=lambda: True, is_bf16_supported=lambda: True)),
             'swift': SimpleNamespace(), 'swift.llm': SimpleNamespace(VllmEngine=factory,
@@ -1064,6 +1072,8 @@ print(ROOT)
             with self.assertRaisesRegex(ValueError, 'explicit'):
                 generate([])
             self.assertEqual(generate([], adapter_request=request), [])
+        self.assertTrue(factory.call_args.kwargs['enforce_eager'])
+        self.assertNotIn('enforce_eager', factory.call_args.kwargs['engine_kwargs'])
         self.assertTrue(factory.call_args.kwargs['enable_sleep_mode'])
         self.assertTrue(factory.call_args.kwargs['enable_lora'])
         self.assertEqual(factory.call_args.kwargs['adapters'], [])
