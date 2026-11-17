@@ -295,12 +295,12 @@ def experiment03_profile(cells, inference=False):
             cell = code(source)
         elif source.startswith('## Experiment settings'):
             cell = md('''## Experiment 03 settings
-SFT trains BF16 LoRA with microbatch 2 and accumulation 4.
+SFT trains BF16 LoRA with microbatch 8 and accumulation 1.
 Validation logs loss/token accuracy and vLLM-generated F1; F1 selects the best checkpoint.
 Training model and optimizer move to RAM while generation and scoring run sequentially on GPU.
 Each eval recreates vLLM; this is process isolation, not a persistent sleep-mode engine.
 BF16 8B training may require more VRAM than an L4; sufficient host RAM is also required.
-Default 2 epochs, peak learning rate 1e-4 (3% warmup), eval/save every 170 optimizer steps.
+Default 1 epoch, peak learning rate 5e-5 (3% warmup), eval/save every 170 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
@@ -312,9 +312,9 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
 BF16 LoRA with sequential vLLM validation F1 and teacher-forced loss/token accuracy, including step 0.
-BF16 base; microbatch 2 x accumulation 4 preserves effective batch 8 on one GPU.
+BF16 base; microbatch 8 x accumulation 1 preserves effective batch 8 on one GPU.
 Periodic validation: ALL validation questions (1,000), every 170 steps.
-Full training runs 2 epochs and selects the highest generated validation F1 checkpoint.
+Full training runs 1 epoch and selects the highest generated validation F1 checkpoint.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
 Keep TRAIN_PROJECTOR=False with periodic vLLM adapter validation; ViT stays frozen.
 best_model/ is a complete BF16 checkpoint, not a 4-bit checkpoint or a standalone adapter.

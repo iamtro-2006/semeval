@@ -21,8 +21,8 @@ All project paths resolve under /content/semeval/task 6 on Colab.
 ## Shared recipe
 
 BF16 frozen base + language LoRA (not NF4): r=16, alpha=32, dropout=0.05, attention q/k/v/o
-and MLP gate/up/down. Microbatch 2, accumulation 4, effective batch 8 on one GPU.
-Two epochs, peak LR 1e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0.
+and MLP gate/up/down. Microbatch 8, accumulation 1, effective batch 8 on one GPU.
+One epoch, peak LR 5e-5, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0.
 Save/eval every 170 optimizer steps. SFT_OVERRIDES can change these explicitly.
 Full validation at step 0 and every evaluation; highest generated BERTScore-F1 selects the
 best checkpoint. Loss/token accuracy are also logged. Step 0 is a baseline, not a saved checkpoint.
