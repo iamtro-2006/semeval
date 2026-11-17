@@ -25,6 +25,7 @@ peft:
   target_modules: 'model.language_model.layers.*\.(self_attn\.(q_proj|k_proj|v_proj|o_proj)|mlp\.(gate_proj|up_proj|down_proj))'
   train_projector: false  # optional LoRA on Qwen3-VL merger + DeepStack mergers; keep ViT frozen
 training:
+  eval_on_start: true
   output_dir: outputs/runs/experiment03/sft
   num_train_epochs: 2
   learning_rate: 0.0001

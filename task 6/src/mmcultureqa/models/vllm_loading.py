@@ -3,6 +3,7 @@ import json
 import os
 
 from ..common import image, messages, path
+from .family import model_type
 
 
 def load_vllm(cfg):
@@ -18,7 +19,11 @@ def load_vllm(cfg):
     if dtype == 'bfloat16' and not torch.cuda.is_bf16_supported():
         raise RuntimeError('BF16 inference requires a BF16-capable GPU, or select float16')
     os.environ.update(MAX_PIXELS=str(cfg['model']['max_pixels']), MIN_PIXELS=str(cfg['model']['min_pixels']))
-    from swift.llm import VllmEngine, InferRequest, RequestConfig
+    family = model_type(cfg)
+    if family == 'qwen3_5':
+        from swift.infer_engine import VllmEngine, InferRequest, RequestConfig
+    else:
+        from swift.llm import VllmEngine, InferRequest, RequestConfig
     mc, ic = cfg['model'], cfg['inference']
     adapters, rank = [], cfg['peft']['r']
     if mc.get('adapter'):
@@ -31,12 +36,17 @@ def load_vllm(cfg):
             raise ValueError('Adapter base model does not match the configured base model')
         rank = adapter_config['r']
         adapters = [str(adapter)]
-    engine = VllmEngine(mc['name'], getattr(torch, dtype), model_type='qwen3_vl', use_hf=True,
+    engine = VllmEngine(mc['name'], torch_dtype=getattr(torch, dtype), model_type=family, use_hf=True,
                         revision=mc.get('revision'), adapters=adapters, max_lora_rank=rank,
                         max_model_len=ic['vllm_max_model_len'], max_num_seqs=ic['vllm_max_num_seqs'],
                         gpu_memory_utilization=ic['vllm_gpu_memory_utilization'],
                         enable_prefix_caching=True, limit_mm_per_prompt={'image': 1, 'video': 0},
                         seed=cfg['training']['seed'])
+    if family == 'qwen3_5':
+        engine.template.enable_thinking = mc.get('enable_thinking', False)
+        meta = engine.template.template_meta
+        engine.template.response_prefix = (meta.thinking_prefix if engine.template.enable_thinking
+                                           else meta.non_thinking_prefix)
     cfg['_dtype'] = dtype
 
     def generate(rows):

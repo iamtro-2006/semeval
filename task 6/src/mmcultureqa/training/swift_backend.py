@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 
 from ..common import messages, path, provenance, read_jsonl, rows_for, write_jsonl
+from ..models.family import model_type
 
 
 def validate_grpo_batching(args):
@@ -90,7 +91,7 @@ def build_arguments(cfg, stage):
     if projector:
         target_regex = (rf'(?:{target_regex}|model\.visual\.'
                         r'(?:merger|deepstack_merger_list\.\d+)\.(?:linear_fc1|linear_fc2))')
-    args.update(model=mc['name'], model_revision=mc.get('revision'), model_type='qwen3_vl', use_hf=True,
+    args.update(model=mc['name'], model_revision=mc.get('revision'), model_type=model_type(cfg), use_hf=True,
                 train_type='lora', tuner_backend='peft', output_dir=str(out), add_version=False,
                 create_checkpoint_symlink=False, dataset=[str(data / 'train.jsonl')],
                 val_dataset=[str(data / 'validation.jsonl')], split_dataset_ratio=0., dataset_shuffle=False,
@@ -115,6 +116,7 @@ def build_arguments(cfg, stage):
     if cfg.get('resume_from_checkpoint'):
         args['resume_from_checkpoint'] = str(path(cfg['resume_from_checkpoint']))
     if stage == 'sft':
+        args['eval_on_start'] = tc.get('eval_on_start', True)
         args.update(predict_with_generate=generate, metric='mmcqa_bertscore' if generate else None,
                     max_new_tokens=cfg['monitor']['max_new_tokens'], temperature=0.,
                     metric_for_best_model='bertscore_f1' if generate else 'loss', greater_is_better=generate)
@@ -140,6 +142,12 @@ def build_arguments(cfg, stage):
         if args.get('beta', 0) > 0:
             args['ref_adapters'] = args['adapters']
     args.update(cfg.get('swift', {}))
+    if model_type(cfg) == 'qwen3_5':
+        if stage != 'sft' or generate:
+            raise ValueError('Qwen3.5 currently supports answer-only SFT with loss monitoring in this project')
+        args['tuner_type'] = args.pop('train_type')
+        args.pop('metric', None)
+        args.update(enable_thinking=False, add_non_thinking_prefix=True)
     if stage == 'grpo':
         # ms-swift rejects even an unused 'colocate' mode when vLLM is disabled.
         # Normalize after native overrides too, so stale settings cannot re-enable the mode.
@@ -168,19 +176,27 @@ def train(cfg, stage):
     if dtype == 'bfloat16' and not torch.cuda.is_bf16_supported():
         raise RuntimeError('BF16 is required by this configuration; select a BF16-capable GPU such as L4')
     cfg['_dtype'] = cfg['model']['dtype'] = dtype
-    cfg['_framework'] = 'ms-swift==3.11.3'
+    from importlib.metadata import version
+    cfg['_framework'] = 'ms-swift==' + version('ms-swift')
     native = build_arguments(cfg, stage)
     os.environ.update(MAX_PIXELS=str(cfg['model']['max_pixels']), MIN_PIXELS=str(cfg['model']['min_pixels']))
-    from swift.llm import TrainArguments, RLHFArguments
-    from swift.llm.train.sft import SwiftSft
-    from swift.llm.train.rlhf import SwiftRLHF
+    modern = model_type(cfg) == 'qwen3_5'
+    if modern:
+        from swift.arguments import SftArguments as TrainArguments
+        from swift.pipelines.train.sft import SwiftSft
+        RLHFArguments = SwiftRLHF = None
+    else:
+        from swift.llm import TrainArguments, RLHFArguments
+        from swift.llm.train.sft import SwiftSft
+        from swift.llm.train.rlhf import SwiftRLHF
     if stage == 'grpo':
         # Force lazy trainer dependencies to fail before loading the scorer or Qwen.
         from swift.trainers.rlhf_trainer.grpo_trainer import GRPOTrainer
     from transformers import TrainerCallback
     from .swift_metrics import register_plugins
     from ..storage import checkpoint_callbacks
-    register_plugins(cfg)
+    if not modern:
+        register_plugins(cfg)
     # Reserve scorer memory before vLLM profiles the GPU. Reuse this cached encoder
     # for every reward/metric call using the configured scoring precision.
     from .swift_metrics import preload_scorer

@@ -60,8 +60,10 @@ def main():
         model.eval()
 
         def generate(batch):
+            template_kwargs = ({'enable_thinking': cfg['model']['enable_thinking']}
+                               if 'enable_thinking' in cfg['model'] else {})
             texts = [processor.apply_chat_template(messages(cfg, r['question']), tokenize=False,
-                     add_generation_prompt=True) for r in batch]
+                     add_generation_prompt=True, **template_kwargs) for r in batch]
             inputs = processor(text=texts, images=[image(r) for r in batch], padding=True,
                                truncation=False, return_tensors='pt').to(model.device)
             with torch.inference_mode():

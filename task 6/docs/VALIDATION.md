@@ -1,5 +1,14 @@
 # Local CPU validation
 
+## Current answer-only multi-model SFT workflow
+
+- Active notebooks are 01–04 plus 05_sft_qwen3vl8b_colab and 06_sft_qwen35_4b_colab. Teacher/reasoning/comparison notebooks were removed; SFT notebooks no longer invoke CoT validation. Sections below this current summary document earlier workflows.
+- All SFT configs use eval_on_start=true for a measured step-0 loss; GRPO native arguments remain unchanged. Curve tests retain the real step-0 value.
+- Qwen3-VL-8B and Qwen3.5-4B have pinned model revisions and distinct output runs. Qwen3.5 uses a separate modern dependency set, Swift 4.x tuner_type/API mapping, explicit hybrid/linear-attention LoRA targets and non-thinking inference template prefix.
+- Notebook 04 supports legacy or Qwen3.5 runtime profiles and restores architecture/thinking settings from the downloaded artifact. CPU mocks verify the modern engine dispatch and template settings. No GPU execution performed.
+
+## Earlier workflow records
+
 ## Original FP16 vs Drive SFT in one inference notebook
 
 - Notebook 07 runs original and merged SFT sequentially with one short user-only zero-shot CoT prompt. System prompts are preserved, not replaced. The SFT artifact remains BF16 on Drive; inference.dtype=float16 is applied after artifact restoration.

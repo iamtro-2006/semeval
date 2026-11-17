@@ -1,3 +1,5 @@
+> Archived workflow: reasoning notebooks and CoT validation have been removed from the active SFT pipeline. See README.md for the current notebook list.
+
 # Cultural reasoning distillation
 
 Thứ tự: **01 (nếu chưa có dữ liệu) → 05 teacher → 06 SFT student → 04 inference**. SFT đáp án notebook 02 là baseline riêng.

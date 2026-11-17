@@ -337,6 +337,7 @@ print(ROOT)
         from mmcultureqa.training.swift_backend import build_arguments
         with patch.dict(os.environ, WORLD_SIZE='1'):
             args = build_arguments(cfg, 'grpo')
+        self.assertNotIn('eval_on_start', args)
         self.assertEqual(args['quant_method'], 'bnb')
         self.assertEqual(args['quant_bits'], 4)
         self.assertEqual(args['bnb_4bit_quant_type'], 'nf4')
@@ -806,6 +807,81 @@ print(ROOT)
             with self.assertRaises(ValueError):
                 final_answer(text)
 
+    def test_new_sft_models_have_initial_validation_and_correct_lora_families(self):
+        self.grpo_config()
+        from mmcultureqa.common import config
+        from mmcultureqa.training.swift_backend import build_arguments
+        for filename, family, batch in [('sft.yaml', 'qwen3_vl', 8),
+                                       ('sft_qwen3vl8b.yaml', 'qwen3_vl', 2),
+                                       ('sft_qwen35_4b.yaml', 'qwen3_5', 4)]:
+            with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs' / filename)]):
+                cfg = config()
+            args = build_arguments(cfg, 'sft')
+            self.assertEqual(args['model_type'], family)
+            self.assertTrue(args['eval_on_start'])
+            self.assertFalse(args['predict_with_generate'])
+            self.assertEqual(args['metric_for_best_model'], 'loss')
+            self.assertEqual(args['per_device_train_batch_size'], batch)
+            self.assertEqual(batch * args['gradient_accumulation_steps'], 8)
+            self.assertEqual(args['quant_bits'], 4)
+            if family == 'qwen3_5':
+                import re
+                self.assertEqual(args['tuner_type'], 'lora')
+                self.assertNotIn('train_type', args)
+                self.assertFalse(args['enable_thinking'])
+                self.assertTrue(re.fullmatch(args['target_regex'], 'model.language_model.layers.0.linear_attn.in_proj_qkv'))
+                self.assertTrue(re.fullmatch(args['target_regex'], 'model.language_model.layers.3.self_attn.q_proj'))
+                self.assertIsNone(re.fullmatch(args['target_regex'], 'model.visual.blocks.0.attn.qkv'))
+
+    def test_active_notebook_set_has_no_reasoning_generation_or_cot_validation(self):
+        active = {p.stem for p in (PROJECT / 'notebooks').glob('*.ipynb')}
+        self.assertEqual(active, {'01_hf_to_drive_rclone', '02_sft_colab', '03_grpo_colab', '04_inference_colab',
+                                 '05_sft_qwen3vl8b_colab', '06_sft_qwen35_4b_colab'})
+        for name, config_name in [('02_sft_colab', 'sft.yaml'), ('05_sft_qwen3vl8b_colab', 'sft_qwen3vl8b.yaml'),
+                                  ('06_sft_qwen35_4b_colab', 'sft_qwen35_4b.yaml')]:
+            self.assertFalse(any('COT_MAX_NEW_TOKENS' in source for source in cells(name)))
+            ns, commands, _ = self.experiment(name)
+            exec(find_cell(name, 'SFT_OVERRIDES ='), ns)
+            self.assertTrue(commands[0][commands[0].index('--config') + 1].endswith(config_name))
+        self.assertIn("RUNTIME_PROFILE = 'qwen35'", find_cell('06_sft_qwen35_4b_colab', 'INSTALL_VLLM ='))
+        self.assertIn("RUNTIME_PROFILE = 'legacy'", find_cell('04_inference_colab', 'INSTALL_VLLM ='))
+
+    def test_step_zero_val_loss_is_preserved_in_learning_curve(self):
+        sys.path.insert(0, str(self.project / 'src'))
+        from mmcultureqa.training.curves import load_points
+        folder = self.project / 'outputs/curve'
+        folder.mkdir(parents=True)
+        (folder / 'logging.jsonl').write_text('\n'.join(json.dumps(row) for row in [
+            {'eval_loss': 1.2, 'global_step/max_steps': '0/1125'},
+            {'loss': 0.9, 'global_step/max_steps': '5/1125'},
+            {'eval_loss': 0.8, 'global_step/max_steps': '225/1125'}]), encoding='utf-8')
+        self.assertEqual(load_points(folder)['eval_loss'], [(0, 1.2), (225, 0.8)])
+
+    def test_qwen35_artifact_restores_family_and_disables_thinking_for_vllm(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.models.artifacts import configure_merged_model
+        from mmcultureqa.models.vllm_loading import load_vllm
+        folder = self.project / 'outputs/qwen35/best_model'
+        merged_fixture(folder)
+        saved = json.loads((folder / 'run_config.json').read_text(encoding='utf-8'))
+        saved['model'].update(model_type='qwen3_5', enable_thinking=False)
+        (folder / 'run_config.json').write_text(json.dumps(saved), encoding='utf-8')
+        cfg = configure_merged_model(cfg, folder)
+        cfg['inference'] = dict(vllm_max_model_len=2048, vllm_max_num_seqs=4, vllm_gpu_memory_utilization=0.8)
+        template = SimpleNamespace(enable_thinking=True, response_prefix='<think>\n',
+            template_meta=SimpleNamespace(thinking_prefix='<think>\n', non_thinking_prefix='<think>\n\n</think>\n\n'))
+        factory = MagicMock(return_value=SimpleNamespace(template=template))
+        modules = {'torch': SimpleNamespace(bfloat16='bf16', cuda=SimpleNamespace(
+            is_available=lambda: True, is_bf16_supported=lambda: True)),
+            'swift': SimpleNamespace(), 'swift.infer_engine': SimpleNamespace(VllmEngine=factory,
+                InferRequest=lambda **k: k, RequestConfig=lambda **k: k)}
+        with patch.dict(sys.modules, modules):
+            load_vllm(cfg)
+        self.assertEqual(factory.call_args.kwargs['model_type'], 'qwen3_5')
+        self.assertEqual(factory.call_args.kwargs['torch_dtype'], 'bf16')
+        self.assertFalse(template.enable_thinking)
+        self.assertEqual(template.response_prefix, template.template_meta.non_thinking_prefix)
+
     def test_vllm_fp16_and_sampling_parameters_are_forwarded(self):
         cfg = self.grpo_config()
         from mmcultureqa.models.vllm_loading import load_vllm
@@ -822,45 +898,10 @@ print(ROOT)
         with patch.dict(sys.modules, modules):
             generate = load_vllm(cfg)
             self.assertEqual(generate([]), [])
-        self.assertEqual(factory.call_args.args[1], 'fp16')
+        self.assertEqual(factory.call_args.kwargs['torch_dtype'], 'fp16')
         self.assertEqual(request_config.call_args.kwargs['presence_penalty'], 1.5)
         self.assertEqual(request_config.call_args.kwargs['top_p'], 0.8)
 
-    def test_single_inference_notebook_runs_original_and_saved_sft_sequentially(self):
-        ns, _, copies = self.experiment()
-        self.grpo_config()
-        from mmcultureqa.common import write_jsonl
-        write_jsonl(self.project / 'data/prepared/validation.jsonl', [
-            dict(id='v1', image='v1.jpg', question='Question?', answer='Gold')])
-        with redirect_stdout(StringIO()):
-            exec(find_cell('07_base_vs_sft_cot_colab', "RUN_NAME = 'base_fp16"), ns)
-        calls, configs = [], []
-
-        def execute(command, check=True):
-            calls.append(command[2])
-            if command[2] == 'mmcultureqa.inference.predict':
-                cfg = json.loads(Path(command[command.index('--config') + 1]).read_text(encoding='utf-8'))
-                configs.append(cfg)
-                write_jsonl(cfg['inference']['output'], [{'id': 'v1', 'answer': 'Predicted'}])
-            else:
-                Path(command[command.index('--out') + 1]).write_text('{}', encoding='utf-8')
-            return subprocess.CompletedProcess(command, 0)
-
-        ns['stream_run'] = execute
-        with redirect_stdout(StringIO()):
-            exec(find_cell('07_base_vs_sft_cot_colab', "for label in ('base', 'sft'):"), ns)
-        self.assertEqual(calls, ['mmcultureqa.inference.predict', 'mmcultureqa.score'] * 2)
-        self.assertEqual(configs[0]['model']['name'], 'Qwen/Qwen3-VL-4B-Instruct')
-        self.assertFalse(configs[0]['model']['merged_model'])
-        self.assertTrue(configs[1]['model']['merged_model'])
-        for cfg in configs:
-            self.assertIsNone(cfg['model']['adapter'])
-            self.assertFalse(cfg['model']['load_in_4bit'])
-            self.assertEqual(cfg['inference']['dtype'], 'float16')
-            self.assertNotIn('system_prompt', cfg['inference'])
-            self.assertEqual(cfg['inference']['format_retries'], 1)
-            self.assertTrue(cfg['inference']['prompt_file'].endswith('qa_cot_simple.txt'))
-        self.assertTrue(any(source.endswith('experiment03/sft/best_model') for source, _ in copies))
 
     def test_cot_prompt_survives_model_restore_and_format_failures_count_as_empty(self):
         self.grpo_config()
@@ -959,57 +1000,15 @@ print(ROOT)
         with self.assertRaisesRegex(ValueError, 'gold_sha256'):
             build_comparison(run)
 
-    def test_baseline_notebook_adds_cot_after_direct_validation_only(self):
-        ns, commands, _ = self.experiment()
-        ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
-        exec(find_cell('02_sft_colab', 'VAL_LIMIT ='), ns)
-        exec(find_cell('02_sft_colab', 'COT_MAX_NEW_TOKENS ='), ns)
-        self.assertNotIn('--prompt-mode', commands[0])
-        self.assertIn('--prompt-mode', commands[1])
-        self.assertEqual(commands[1][commands[1].index('--prompt-mode') + 1], 'cot')
-        self.assertNotIn('--limit', commands[1])
-        for other in ('03_grpo_colab', '06_sft_reasoning_colab'):
-            self.assertFalse(any('COT_MAX_NEW_TOKENS =' in source for source in cells(other)))
 
     def test_active_sft_notebooks_generate_final_validation_with_vllm(self):
-        for notebook in ('02_sft_colab', '06_sft_reasoning_colab'):
+        for notebook in ('02_sft_colab', '05_sft_qwen3vl8b_colab', '06_sft_qwen35_4b_colab'):
             ns, commands, _ = self.experiment(notebook)
             ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
             exec(find_cell(notebook, 'VAL_LIMIT ='), ns)
             self.assertEqual(commands[0][-2:], ['--backend', 'vllm'])
-        self.assertEqual(ns['RUN_NAME'], 'experiment04_reasoning')
-        self.assertIn('INSTALL_VLLM = True', find_cell('05_teacher_reasoning_colab', 'INSTALL_VLLM ='))
+        self.assertEqual(ns['RUN_NAME'], 'experiment06_qwen35_4b')
 
-    def test_reasoning_notebook_download_and_training_pass_the_same_absolute_dataset(self):
-        ns, commands, copies = self.experiment('06_sft_reasoning_colab')
-        from mmcultureqa.common import write_jsonl
-        from mmcultureqa.data.distillation import digest
-        train = [dict(id='t1', question='Observe?', answer='Gold', image='train.jpg')]
-        validation = [dict(id='v1', question='Held-out?', answer='Other', image='val.jpg')]
-        write_jsonl(self.project / 'data/prepared/train.jsonl', train)
-        write_jsonl(self.project / 'data/prepared/validation.jsonl', validation)
-        real_copy = ns['copy']
-
-        def download(source, destination, *args):
-            if str(source).startswith('remote:task6-data/reasoning/'):
-                directory = Path(destination)
-                rows = [{**train[0], 'reasoning': '1. Observe.\n2. Relate.\n3. Answer.'}]
-                write_jsonl(directory / 'train_reasoning.jsonl', rows)
-                report = dict(schema_version=1, complete=True, smoke=False, accepted=1,
-                              source_train_hash=digest(train), source_validation_hash=digest(validation), accepted_hash=digest(rows))
-                (directory / 'dataset.json').write_text(json.dumps(report), encoding='utf-8')
-                copies.append((str(source), str(destination)))
-            else:
-                real_copy(source, destination, *args)
-
-        ns['copy'] = download
-        with redirect_stdout(StringIO()):
-            exec(find_cell('06_sft_reasoning_colab', "TEACHER_RUN_NAME ="), ns)
-            exec(find_cell('06_sft_reasoning_colab', 'SFT_OVERRIDES ='), ns)
-        self.assertIn('configs/sft_reasoning.yaml', commands[0][commands[0].index('--config') + 1].replace('\\', '/'))
-        self.assertIn('data.reasoning_dir=' + json.dumps(str(ns['reasoning_dir'])), commands[0])
-        self.assertEqual([c[2] for c in commands], ['mmcultureqa.training.sft', 'mmcultureqa.export'])
-        self.assertTrue(any(dest == 'remote:task6-runs/experiment04_reasoning/sft' for _, dest in copies))
 
     def test_teacher_and_student_smoke_use_100_seed42_training_rows(self):
         self.grpo_config()
@@ -1054,31 +1053,6 @@ print(ROOT)
         with self.assertRaisesRegex(ValueError, 'smoke'):
             load_reasoned_train(student, train, validation)
 
-    def test_student_smoke_limits_training_only_and_preserves_full_validation(self):
-        ns, commands, copies = self.experiment('06_sft_reasoning_colab', smoke=True)
-        ns['reasoning_dir'] = self.project / 'data/reasoning/cultural_teacher01-smoke100'
-        exec(find_cell('06_sft_reasoning_colab', 'SFT_OVERRIDES ='), ns)
-        args = dict(value.split('=', 1) for index, value in enumerate(commands[0]) if commands[0][index - 1] == '--set')
-        self.assertEqual(args['data.reasoning_smoke'], 'true')
-        self.assertEqual(args['data.limit'], 'null')
-        self.assertEqual(args['training.save_steps'], '8')
-        self.assertEqual(args['training.eval_steps'], '8')
-        self.assertNotIn('training.eval_strategy', args)
-        self.assertNotIn('training.load_best_model_at_end', args)
-        self.assertNotIn('training.max_steps', args)  # not the old one-step/8-row recipe
-        self.assertTrue(args['training.output_dir'].endswith('sft-smoke"'))
-        self.assertTrue(any(dest.endswith('/sft-smoke') for _, dest in copies))
-        count = len(commands)
-        ns['stream_run'] = lambda cmd, check=True: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0)
-        with redirect_stdout(StringIO()):
-            exec(find_cell('06_sft_reasoning_colab', 'VAL_LIMIT ='), ns)
-        self.assertEqual(len(commands), count + 1)
-        self.assertEqual(commands[-1][2], 'mmcultureqa.evaluate')
-        self.assertNotIn('--limit', commands[-1])
-        self.assertEqual(commands[-1][-2:], ['--backend', 'vllm'])
-        source = find_cell('05_teacher_reasoning_colab', 'TEACHER_LIMIT =')
-        self.assertIn('TEACHER_LIMIT = 100 if SMOKE else None', source)
-        self.assertIn("('-smoke100' if SMOKE else '')", source)
 
 
 if __name__ == '__main__':

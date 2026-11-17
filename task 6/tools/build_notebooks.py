@@ -295,7 +295,7 @@ def experiment03_profile(cells, inference=False):
         elif source.startswith('## Experiment settings'):
             cell = md('''## Experiment 03 settings
 SFT trains with NF4 QLoRA, BF16 compute, batch 8 and accumulation 1.
-Periodic monitoring uses teacher-forced val loss/token accuracy, without generation or mmBERT.
+Initial validation logs val loss at step 0 before any update; periodic monitoring uses val loss/token accuracy.
 Default 2 epochs, peak learning rate 1e-4 (3% warmup), eval/save every 225 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
@@ -307,7 +307,7 @@ Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchange
 
 
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
-Default PREDICT_WITH_GENERATE=False: teacher-forced validation loss and token accuracy.
+Default PREDICT_WITH_GENERATE=False: teacher-forced val loss/token accuracy, including an initial step-0 evaluation.
 NF4 base, BF16 compute; train batch 8 x accumulation 1 preserves effective batch 8 on one GPU.
 Periodic validation: batch 8, ALL validation questions (1,000), every 225 steps.
 Full training runs 2 epochs and selects the lowest val loss checkpoint.
@@ -446,15 +446,15 @@ grpo_notebook += learning_curves('GRPO', 'GRPO_STAGE', 'grpo')
 grpo_notebook += final_validation('GRPO', 'GRPO_STAGE')
 
 inference_notebook = experiment03_profile(gpu_setup, inference=True) + [md('''## Test inference from the merged BF16 model
-Download only experiment03's best_model from Drive. No original Qwen/adapter download is needed.
+Download the selected run's best_model from Drive. No original Qwen/adapter download is needed.
 Model and processor loading are local-files-only; missing files raise an error instead of falling back to the Hub.
 Uses the saved prompt and preprocessing from the exported training run.
-For notebook 06's student, set RUN_NAME and INPUT_RUN_NAME to experiment04_reasoning.
-The saved reasoning format is restored automatically; predictions contain only the final answer.
-Raw student reasoning is saved separately as *.traces.jsonl for inspection.
+Supports merged Qwen3-VL-4B, Qwen3-VL-8B and Qwen3.5-4B checkpoints.
+Choose RUNTIME_PROFILE='qwen35' in the install cell for Qwen3.5; legacy for Qwen3-VL.
+Set INPUT_RUN_NAME to the training run to download; model family and prompt restore from that artifact.
 Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
-'''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03
+'''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03 / experiment05_qwen3vl8b / experiment06_qwen35_4b
 MODEL_STAGE = SFT_STAGE
 SPLIT = 'devtest'
 TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test
@@ -466,6 +466,9 @@ from mmcultureqa.models.artifacts import require_merged_model
 local_model = PROJECT_ROOT / 'outputs/inputs/models' / INPUT_RUN_NAME / MODEL_STAGE / 'best_model'
 copy(cloud(f'task6-runs/{INPUT_RUN_NAME}/{MODEL_STAGE}/best_model'), local_model)
 require_merged_model(local_model)
+saved = json.loads((local_model / 'run_config.json').read_text(encoding='utf-8'))
+if saved['model'].get('model_type') == 'qwen3_5' and globals().get('RUNTIME_PROFILE', 'legacy') != 'qwen35':
+    raise RuntimeError('Select RUNTIME_PROFILE=qwen35 in the installation cell and rerun setup for this model')
 predictions = RUNS / 'predictions'
 prediction_file = predictions / f'sft_{SPLIT}.jsonl'
 overrides = {'model.name': str(local_model), 'model.revision': None, 'model.adapter': None,
@@ -493,273 +496,73 @@ else:
     print(f'{SPLIT} has no public answers. Predictions saved for submission; no local score available.')
 ''')]
 
-teacher_notebook = experiment03_profile(gpu_setup[:-2]) + [md('''## Generate cultural reasoning · teacher only
-Official Qwen/Qwen3-VL-8B-Thinking-FP8, prequantized by Qwen; vLLM loads one teacher.
-Use L4/Ada, Hopper or newer for this block-FP8 recipe. No student is loaded here.
-ALL prepared TRAIN rows are attempted. Validation/test labels never enter teacher requests.
-Teacher observes the image and knows the reference answer. It thinks, then writes 3–6 concise,
-evidence-grounded solution steps; those steps become the student's <think> target.
-Raw native teacher thinking stays in the audit journal; it is not blindly copied into the student.
-Unsupported, malformed and truncated outputs retry, then go to rejected.jsonl.
-These are synthetic, answer-conditioned solutions, not automatically verified cultural facts.
-Inspect audit_sample.jsonl and rejected.jsonl before investing in student training.
-'''), code('''import json
-from mmcultureqa.storage import upload_filters
-TEACHER_RUN_NAME = 'cultural_teacher01'
-SMOKE = False  # True: generate only 100 random training samples, seed 42
-RESUME_FROM_DRIVE = False  # True only if this teacher run already exists on Drive
-TEACHER_LIMIT = 100 if SMOKE else None
-TEACHER_OVERRIDES = {}  # e.g. {'teacher.batch_size': 4, 'teacher.max_num_seqs': 2} if memory is tight
-if not re.fullmatch(r'[A-Za-z0-9_-]+', TEACHER_RUN_NAME):
-    raise ValueError('Choose a valid teacher run name')
-teacher_name = TEACHER_RUN_NAME + ('-smoke100' if SMOKE else '')
-teacher_dir = PROJECT_ROOT / 'outputs/reasoning' / teacher_name
-teacher_cloud = f'task6-data/reasoning/{teacher_name}'
-if RESUME_FROM_DRIVE:
-    copy(cloud(teacher_cloud), teacher_dir, *upload_filters('reasoning'))
-teacher_args = {'teacher.output_dir': str(teacher_dir), 'teacher.limit': TEACHER_LIMIT, **TEACHER_OVERRIDES}
-cmd = [sys.executable, '-m', 'mmcultureqa.data.teacher_reasoning',
-       '--config', str(PROJECT_ROOT / 'configs/teacher_reasoning.yaml')]
-for key, value in teacher_args.items():
-    cmd += ['--set', f'{key}={json.dumps(value)}']
-result = stream_run(cmd, check=False)
-# Preserve the resumable journal even when the child exits with an error.
-if teacher_dir.is_dir():
-    copy(teacher_dir, cloud(teacher_cloud), *upload_filters('reasoning'))
-result.check_returncode()
-report = json.loads((teacher_dir / 'dataset.json').read_text(encoding='utf-8'))
-print('Teacher data on Drive:', cloud(teacher_cloud))
-print('Accepted:', report['accepted'], 'Rejected:', report['rejected'])
-'''), code('''from mmcultureqa.common import read_jsonl
-examples = read_jsonl(teacher_dir / 'audit_sample.jsonl')
-for example in examples[:5]:
-    print('ID:', example['id'], '\\nImage:', example['image'])
-    print('Question:', example['question'])
-    print(example['reasoning'])
-    print('Answer:', example['answer'], '\\n')
-''')]
 
-# Independent student run: keep the baseline SFT notebook and paused GRPO recipe intact.
-reasoning_notebook = []
-for cell in sft_notebook:
-    source = ''.join(cell['source'])
-    source = source.replace('experiment03', 'experiment04_reasoning').replace('Experiment 03', 'Reasoning distillation')
-    if cell['cell_type'] == 'code':
-        source = source.replace("'configs/sft.yaml'", "'configs/sft_reasoning.yaml'")
-        source = source.replace('False explicitly selects a one-step smoke run',
-                                'False trains up to 100 random reasoning samples, seed 42')
-        if 'TRAIN_PROJECTOR = False' in source:
-            reasoning_notebook += [md('''## Download the completed teacher dataset
-Train a fresh Qwen3-VL-4B-Instruct adapter with <think>steps</think><answer>gold</answer>.
-The student prompt contains only image + question. Gold answers are supervision, never input.
-Default microbatch 2 × accumulation 4 keeps effective batch 8 as reasoning increases sequence length.
-Full mode requires full teacher data. RUN_FULL=False trains up to 100 random accepted rows, seed 42.
-Smoke uses teacher's -smoke100 dataset by default; set TEACHER_SMOKE_DATA=False to sample a full teacher dataset.
-Source coverage must be at least 95%; smoke data is rejected by full training.
-Rejected teacher rows are excluded. Inspect the audit sample from notebook 05 first.
-Periodic full validation uses only held-out gold answers, with no synthetic validation rationale;
-its teacher-forced loss is a proxy and does not evaluate reasoning quality.
-Final vLLM evaluation generates reasoning, extracts only <answer>, then applies the usual scorer.
-'''), code('''TEACHER_RUN_NAME = 'cultural_teacher01'
-TEACHER_SMOKE_DATA = not RUN_FULL  # False: use full teacher data even for a student smoke run
-if not re.fullmatch(r'[A-Za-z0-9_-]+', TEACHER_RUN_NAME):
-    raise ValueError('Choose a valid teacher run name')
-from mmcultureqa.common import read_jsonl
-from mmcultureqa.data.distillation import load_reasoned_train
-from mmcultureqa.storage import upload_filters
-teacher_name = TEACHER_RUN_NAME + ('-smoke100' if TEACHER_SMOKE_DATA else '')
-reasoning_dir = PROJECT_ROOT / 'data/reasoning' / teacher_name
-# Only the finished dataset and its provenance are needed to train the student.
-copy(cloud(f'task6-data/reasoning/{teacher_name}'), reasoning_dir,
-     '--include', '/train_reasoning.jsonl', '--include', '/dataset.json', '--include', '/generation.json', '--exclude', '**')
-check_cfg = {'data': {'reasoning_dir': str(reasoning_dir), 'reasoning_min_coverage': 0.95,
-                      'reasoning_smoke': not RUN_FULL, 'reasoning_smoke_size': 100, 'reasoning_smoke_seed': 42}}
-load_reasoned_train(check_cfg, read_jsonl(PROJECT_ROOT / 'data/prepared/train.jsonl'),
-                    read_jsonl(PROJECT_ROOT / 'data/prepared/validation.jsonl'))
-''')]
-            source = source.replace('SFT_OVERRIDES = {}',
-                "SFT_OVERRIDES = {'data.reasoning_dir': str(reasoning_dir), 'data.reasoning_smoke': not RUN_FULL,\n"
-                "                 **({'training.save_steps': 8, 'training.eval_steps': 8} if not RUN_FULL else {})}")
-            source = source.replace(
-                "sft_args.update({'data.limit': 8, 'training.max_steps': 1, 'training.eval_strategy': 'no',\n"
-                "                     'training.load_best_model_at_end': False, 'training.save_steps': 1})",
-                "sft_args.update({'data.limit': None, 'data.reasoning_smoke': True})")
-        reasoning_notebook.append(code(source))
-    else:
-        source = source.replace('train batch 8 x accumulation 1', 'train batch 2 x accumulation 4')
-        source = source.replace('batch 8 and accumulation 1', 'batch 2 and accumulation 4')
-        source = source.replace('Periodic validation: batch 8', 'Periodic validation: batch 4')
-        source = source.replace('Default: ALL 1,000 validation examples, even after a one-step training smoke run.',
-                                'Default: ALL 1,000 validation examples, including after a 100-row smoke run.')
-        reasoning_notebook.append(md(source))
+# Active notebooks: answer-only SFT, inference, and the paused legacy GRPO recipe.
+def modern_runtime_profile(cells, default='qwen35'):
+    from textwrap import indent
+    result = []
+    for cell in cells:
+        source = ''.join(cell['source'])
+        if cell['cell_type'] == 'code' and 'INSTALL_VLLM =' in source:
+            source = """# Use 'qwen35' for Qwen3.5; 'legacy' for Qwen3-VL. Select before installation.
+RUNTIME_PROFILE = '__DEFAULT__'
+INSTALL_VLLM = True
+if RUNTIME_PROFILE not in {'legacy', 'qwen35'}:
+    raise ValueError('RUNTIME_PROFILE must be legacy or qwen35')
+requirements = 'requirements-qwen35.txt' if RUNTIME_PROFILE == 'qwen35' else 'requirements-vllm.txt'
+stream_run([sys.executable, '-m', 'pip', 'install', '--upgrade', '-r', str(PROJECT_ROOT / requirements)])
+stream_run([sys.executable, '-m', 'pip', 'check'], check=False)
+stream_run(['nvidia-smi'])
+""".replace('__DEFAULT__', default)
+        elif cell['cell_type'] == 'code' and '# Fail early on dependency/import errors' in source:
+            modern = """from importlib.metadata import version
+from swift.arguments import SftArguments
+from swift.pipelines.train.sft import SwiftSft
+from swift.infer_engine import VllmEngine
+from transformers import Qwen3_5ForConditionalGeneration, AutoProcessor
+from bitsandbytes.nn import Linear4bit
+from vllm import LLM
+import mmcultureqa.training.sft
+import mmcultureqa.inference.predict
+for name in ('torch', 'transformers', 'ms-swift', 'vllm', 'peft', 'trl'):
+    print(name, version(name), flush=True)
+print('Qwen3.5 SFT/inference imports OK', flush=True)
+"""
+            source = ("if RUNTIME_PROFILE == 'qwen35':\n    stream_run([sys.executable, '-c', "
+                      + repr(modern) + "])\nelse:\n" + indent(source, '    '))
+        result.append(code(source) if cell['cell_type'] == 'code' else cell)
+    return result
 
-# Add only to the baseline SFT notebook; notebook 06 already trains on reasoning targets.
-sft_notebook += [md('''## Zero-shot CoT validation on the same SFT checkpoint
-After the direct-answer validation above, run the short, free-form CoT prompt on the SAME held-out rows.
-Uses the same merged BF16 model and vLLM; training and checkpoint selection do not change.
-Only the final answer following Final answer: is scored. Raw reasoning and format errors are saved separately; invalid outputs
-retry once with sampling; a second format failure stops validation with an explicit error.
-Both primary passes use greedy decoding; a CoT format retry uses sampling (temperature 0.7, seed +1).
-CoT has a larger generation budget, shown in the comparison report.
-No in-context demonstrations are included; both evaluations use the already fine-tuned checkpoint.
-'''), code('''COT_MAX_NEW_TOKENS = 1024
-cot_cmd = [sys.executable, '-m', 'mmcultureqa.evaluate', '--run-dir', str(validation_run),
-           '--backend', 'vllm', '--prompt-mode', 'cot', '--cot-max-new-tokens', str(COT_MAX_NEW_TOKENS)]
-if VAL_LIMIT is not None:
-    cot_cmd += ['--limit', str(VAL_LIMIT)]
-cot_result = stream_run(cot_cmd, check=False)
-upload_run(validation_run, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
-cot_result.check_returncode()
-'''), md('''## Validation metrics · direct answer vs CoT
-Compare BERTScore-F1/P/R, BLEU, ROUGE-L and Coverage, with CoT-minus-direct deltas.
-Reports validate that checkpoint and held-out rows match. Save HTML, CSV and JSON to Drive.
-'''), code('''from IPython.display import HTML, display
-from mmcultureqa.common import read_jsonl
-from mmcultureqa.inference.comparison import build_comparison
 
-total_val = len(read_jsonl(PROJECT_ROOT / 'data/prepared/validation.jsonl'))
-baseline_name = 'validation' if VAL_LIMIT is None or VAL_LIMIT >= total_val else f'validation_subset_{VAL_LIMIT}'
-comparison_file = build_comparison(validation_run, baseline_name)
-display(HTML(comparison_file.read_text(encoding='utf-8')))
-upload_run(validation_run, f'task6-runs/{RUN_NAME}/{SFT_STAGE}')
-print('Saved comparison: prompt_comparison.html / .csv / .json')
-''')]
+def sft_model_notebook(run_name, config_name, title, modern=False):
+    result = []
+    for cell in sft_notebook:
+        source = ''.join(cell['source']).replace('experiment03', run_name).replace('Experiment 03', title)
+        source = source.replace("'configs/sft.yaml'", repr('configs/' + config_name))
+        if cell['cell_type'] == 'markdown':
+            source = source.replace('train batch 8 x accumulation 1',
+                                    'train batch 4 x accumulation 2' if modern else 'train batch 2 x accumulation 4')
+            source = source.replace('batch 8 and accumulation 1', 'effective batch 8')
+            source = source.replace('Periodic validation: batch 8',
+                                    'Periodic validation: batch 4' if modern else 'Periodic validation: batch 2')
+            if source.startswith('## SFT only'):
+                source = '## ' + title + '\n' + source.split('\n', 1)[1]
+        result.append(code(source) if cell['cell_type'] == 'code' else md(source))
+    return modern_runtime_profile(result) if modern else result
 
-base_sft_notebook = experiment03_profile(gpu_setup[:-2]) + [md('''## Base FP16 vs saved SFT · inference only
-One notebook, two sequential inference processes: original Qwen3-VL-4B-Instruct and your Drive best_model.
-Both run in FP16 with the same simple zero-shot CoT prompt, image limits and decoding settings.
-The merged SFT files on Drive remain BF16; FP16 casting happens at load time only.
-No training or merging. Model processes exit before scoring or loading the next model.
-Default: all 1,000 held-out validation questions. LIMIT=4 is an explicit inference smoke test.
-Each malformed answer retries once; a second failure raises an error and preserves traces.
-'''), code('''import copy as copy_module
-import json, re, yaml
-from mmcultureqa.common import merge, read_jsonl, write_jsonl
-from mmcultureqa.models.artifacts import require_merged_model
-from mmcultureqa.storage import upload_filters
 
-RUN_NAME = 'base_fp16_vs_sft_cot01'  # use a new name when changing settings
-SFT_RUN_NAME = 'experiment03'
-SFT_MODEL_STAGE = 'sft'
-SPLIT = 'validation'  # validation for metrics; devtest/test for unlabelled inference
-LIMIT = None
-MAX_NEW_TOKENS = 1024
-for name in (RUN_NAME, SFT_RUN_NAME):
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
-        raise ValueError('Use letters, digits, underscores or hyphens for run names')
-if SFT_MODEL_STAGE not in {'sft', 'sft-smoke'} or SPLIT not in {'validation', 'devtest', 'test'}:
-    raise ValueError('Choose a valid SFT stage and held-out split')
-if LIMIT is not None and (not isinstance(LIMIT, int) or LIMIT < 1):
-    raise ValueError('LIMIT must be null or a positive integer')
-
-OUTPUT = PROJECT_ROOT / 'outputs/inference_runs' / RUN_NAME
-OUTPUT.mkdir(parents=True, exist_ok=True)
-local_sft = PROJECT_ROOT / 'outputs/inputs/models' / SFT_RUN_NAME / SFT_MODEL_STAGE / 'best_model'
-copy(cloud(f'task6-runs/{SFT_RUN_NAME}/{SFT_MODEL_STAGE}/best_model'), local_sft)
-require_merged_model(local_sft)
-saved_sft = json.loads((local_sft / 'run_config.json').read_text(encoding='utf-8'))
-source = yaml.safe_load((PROJECT_ROOT / 'configs/sft.yaml').read_text(encoding='utf-8'))
-inference = yaml.safe_load((PROJECT_ROOT / 'configs/inference.yaml').read_text(encoding='utf-8'))
-inference.pop('extends', None)
-template = merge(source, inference)
-for key in ('min_pixels', 'max_pixels'):
-    template['model'][key] = saved_sft['model'][key]
-rows = read_jsonl(PROJECT_ROOT / 'data/prepared' / f'{SPLIT}.jsonl')
-if SPLIT == 'validation':
-    train = read_jsonl(PROJECT_ROOT / 'data/prepared/train.jsonl')
-    if ({r['id'] for r in rows} & {r['id'] for r in train}
-            or {r['image'] for r in rows} & {r['image'] for r in train}):
-        raise ValueError('Training/validation overlap')
-rows = rows[:LIMIT] if LIMIT is not None else rows
-if not rows:
-    raise ValueError('Selected split is empty')
-gold = OUTPUT / 'gold_en.jsonl'
-write_jsonl(gold, rows)
-settings = {'source_sft_run': SFT_RUN_NAME, 'source_sft_stage': SFT_MODEL_STAGE, 'split': SPLIT,
-            'limit': LIMIT, 'count': len(rows), 'dtype': 'float16',
-            'system_prompts': {'base': source.get('system_prompt'), 'sft': saved_sft.get('system_prompt')},
-            'prompt': (PROJECT_ROOT / 'prompts/qa_cot_simple.txt').read_text(encoding='utf-8'),
-            'seed': 42, 'temperature': 0.7, 'top_p': 0.8, 'top_k': 20, 'presence_penalty': 1.5,
-            'max_new_tokens': MAX_NEW_TOKENS}
-(OUTPUT / 'settings.json').write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding='utf-8')
-
-def upload_inference_comparison():
-    copy(OUTPUT, cloud(f'task6-inference/{RUN_NAME}'), *upload_filters('inference_comparison'))
-'''), md('''## Run both models on the same questions
-Original base loads from its pinned Hugging Face revision. SFT loads from the local Drive download.
-Primary decoding uses sampling temperature 0.7, top-p 0.8, top-k 20, presence penalty 1.5.
-These are controlled inference settings, not proof of a quality improvement. Inspect the raw traces.
-'''), code('''for label in ('base', 'sft'):
-    folder = OUTPUT / label
-    folder.mkdir(parents=True, exist_ok=True)
-    cfg = copy_module.deepcopy(template)
-    cfg['model'].update(name=source['model']['name'] if label == 'base' else str(local_sft),
-        revision=source['model']['revision'] if label == 'base' else None,
-        adapter=None, adapter_revision=None, processor=None, processor_revision=None,
-        load_in_4bit=False, dtype='float16', merged_model=label == 'sft', local_files_only=label == 'sft')
-    cfg['data'].update(limit=LIMIT)
-    cfg['training']['seed'] = 42
-    cfg['inference'].update(backend='vllm', dtype='float16',
-        split=SPLIT, output=str(folder / 'predictions.jsonl'), resume=True,
-        prompt_mode='cot', prompt_file=str(PROJECT_ROOT / 'prompts/qa_cot_simple.txt'),
-        max_new_tokens=MAX_NEW_TOKENS, vllm_max_model_len=4096, vllm_max_num_seqs=4,
-        do_sample=True, temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5,
-        on_format_error='raise', format_retries=1)
-    config_file = folder / 'config.json'
-    config_file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
-    print(f'Running {label.upper()} · FP16 · {len(rows)} questions', flush=True)
-    result = stream_run([sys.executable, '-m', 'mmcultureqa.inference.predict', '--config', str(config_file)], check=False)
-    upload_inference_comparison()
-    result.check_returncode()
-    predicted = read_jsonl(folder / 'predictions.jsonl')
-    if len(predicted) != len(rows) or {r['id'] for r in predicted} != {r['id'] for r in rows}:
-        raise ValueError(f'Incomplete predictions: {label}')
-    if all(r.get('answer') for r in rows):
-        # Inference subprocess has exited, releasing its model before loading the scorer.
-        stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
-            '--gold', str(gold), '--pred', str(folder / 'predictions.jsonl'), '--lang', 'en',
-            '--out', str(folder / 'scores.json')])
-        upload_inference_comparison()
-    else:
-        print(f'{SPLIT}: no public labels; predictions/traces saved without scores.')
-'''), md('''## Model comparison
-Same questions, prompt, preprocessing and FP16 inference; compare base vs SFT weights.
-Metrics are shown on a 0–100 scale; Δ = SFT − base, in points.
-'''), code('''from IPython.display import display
-import pandas as pd
-
-if all((OUTPUT / label / 'scores.json').is_file() for label in ('base', 'sft')):
-    metrics = ['BERTScore-F1', 'BERTScore-P', 'BERTScore-R', 'BLEU', 'ROUGE-L', 'Coverage']
-    table_rows = []
-    for label in ('base', 'sft'):
-        score = json.loads((OUTPUT / label / 'scores.json').read_text(encoding='utf-8'))['submission_result']
-        table_rows.append({key: score[key] * (1 if key == 'BLEU' else 100) for key in metrics})
-    table = pd.DataFrame(table_rows, index=['Original base · FP16', 'SFT best · FP16'])
-    table.loc['Δ SFT − base'] = table.iloc[1] - table.iloc[0]
-    styled = table.style.format('{:.3f}').set_caption(f'Base vs SFT · Zero-shot CoT · {len(rows):,} questions').highlight_max(
-        subset=pd.IndexSlice[table.index[:2], :], axis=0, color='#d1fae5').set_table_styles([
-            {'selector': 'caption', 'props': [('font-size', '18px'), ('font-weight', 'bold'), ('padding', '12px')]},
-            {'selector': 'th, td', 'props': [('padding', '10px 14px'), ('text-align', 'right')]}])
-    display(styled)
-    table.to_csv(OUTPUT / 'comparison.csv', encoding='utf-8-sig')
-    (OUTPUT / 'comparison.html').write_text(styled.to_html(), encoding='utf-8')
-    (OUTPUT / 'comparison.json').write_text(json.dumps({'settings': settings, 'metrics_0_100': table.to_dict(orient='index')},
-        ensure_ascii=False, indent=2), encoding='utf-8')
-    upload_inference_comparison()
-else:
-    print('No comparison scores: use the labelled validation split and complete both inference runs.')
-''')]
+sft8b_notebook = sft_model_notebook('experiment05_qwen3vl8b', 'sft_qwen3vl8b.yaml', 'Qwen3-VL-8B · SFT')
+sft35_notebook = sft_model_notebook('experiment06_qwen35_4b', 'sft_qwen35_4b.yaml', 'Qwen3.5-4B · SFT', modern=True)
+inference_notebook = modern_runtime_profile(inference_notebook, default='legacy')
 
 for name, cells in [('01_hf_to_drive_rclone', transfer), ('02_sft_colab', sft_notebook),
                     ('03_grpo_colab', grpo_notebook), ('04_inference_colab', inference_notebook),
-                    ('05_teacher_reasoning_colab', teacher_notebook), ('06_sft_reasoning_colab', reasoning_notebook),
-                    ('07_base_vs_sft_cot_colab', base_sft_notebook)]:
+                    ('05_sft_qwen3vl8b_colab', sft8b_notebook), ('06_sft_qwen35_4b_colab', sft35_notebook)]:
     titles = {'01_hf_to_drive_rclone': '# Task 6 · Hugging Face → Drive',
-              '02_sft_colab': '# Task 6 · SFT only', '03_grpo_colab': '# Task 6 · GRPO only',
+              '02_sft_colab': '# Task 6 · SFT · Qwen3-VL-4B', '03_grpo_colab': '# Task 6 · GRPO only',
               '04_inference_colab': '# Task 6 · Inference and scoring only',
-              '05_teacher_reasoning_colab': '# Task 6 · Teacher cultural reasoning',
-              '06_sft_reasoning_colab': '# Task 6 · Reasoning SFT · Qwen3-VL-4B',
-              '07_base_vs_sft_cot_colab': '# Task 6 · Base vs SFT · Simple zero-shot CoT'}
+              '05_sft_qwen3vl8b_colab': '# Task 6 · SFT · Qwen3-VL-8B',
+              '06_sft_qwen35_4b_colab': '# Task 6 · SFT · Qwen3.5-4B'}
     cells = [md(''.join(cells[0]['source']).replace('# Task 6 · English QA', titles[name], 1))] + cells[1:]
     target = ROOT / 'notebooks' / f'{name}.ipynb'
     target.parent.mkdir(parents=True, exist_ok=True)
