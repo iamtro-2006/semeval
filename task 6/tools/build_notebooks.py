@@ -302,7 +302,7 @@ Selection uses the same merged-model vLLM path/settings as notebook 04, with CUD
 No runtime LoRA, sleep/wake or CPU weight offload during generation.
 Only one temporary merged candidate is kept at a time; export the F1 winner at the end.
 BF16 8B training may require more VRAM than an L4.
-Default 1.2 epochs, peak learning rate 2e-4 (3% warmup), label smoothing 0.005, eval every 125 steps; save every 225 optimizer steps.
+Default 1.2 epochs, peak learning rate 2e-4 (3% warmup), label smoothing disabled, eval every 125 steps; save every 225 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.

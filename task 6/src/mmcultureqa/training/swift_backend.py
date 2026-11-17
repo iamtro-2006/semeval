@@ -8,26 +8,6 @@ from ..common import messages, path, provenance, read_jsonl, rows_for, write_jso
 from ..models.family import model_type
 
 
-def configure_causal_label_smoothing(trainer, factor):
-    """Swift 3.11.3 does not classify Qwen3VLForConditionalGeneration as a CausalLM.
-
-    Its smoother branch would consequently compare logits with same-position labels.
-    Keep the framework smoother/masking, but always request next-token alignment for SFT.
-    """
-    if not factor:
-        return
-    if not 0 < factor < 1:
-        raise ValueError('label_smoothing_factor must be in [0, 1)')
-    smoother = trainer.label_smoother
-    if smoother is None:
-        raise RuntimeError('Label smoothing requested but framework did not initialize its smoother')
-
-    def causal_smoother(outputs, labels, shift_labels=False):
-        return smoother(outputs, labels, shift_labels=True)
-
-    trainer.label_smoother = causal_smoother
-
-
 def validate_grpo_batching(args):
     """Check the grouping constraints before ms-swift allocates GPU models."""
     world = int(os.environ.get('WORLD_SIZE', '1'))
@@ -236,8 +216,6 @@ def train(cfg, stage):
 
     class Pipeline(cls):
         def train(self, trainer):
-            if stage == 'sft':
-                configure_causal_label_smoothing(trainer, native['label_smoothing_factor'])
             trainer.add_callback(AdapterMetadata())
             for callback in checkpoint_callbacks():
                 trainer.add_callback(callback)

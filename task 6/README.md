@@ -22,7 +22,7 @@ All project paths resolve under /content/semeval/task 6 on Colab.
 
 BF16 frozen base + language LoRA (not NF4): r=32, alpha=64, dropout=0.05, attention q/k/v/o
 and MLP gate/up/down. Microbatch 4, accumulation 2, effective batch 8 on one GPU.
-1.2 epochs, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.005.
+1.2 epochs, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.0 (disabled).
 Save every 225 optimizer steps; evaluate loss every 125 steps. SFT_OVERRIDES can change these explicitly.
 During training, full validation computes loss/token accuracy at step 0 and every 125 steps.
 There is NO vLLM, generation F1, scorer, sleep/wake or CPU model swapping during SFT.
@@ -42,9 +42,8 @@ When the subject or its meaning is ambiguous, compare plausible interpretations 
 Provide a complete, accurate, culturally grounded answer in English. Address every part of the question, including any requested identification, description, purpose, or cultural significance. Support your answer with relevant details and keep the explanation focused on what the question asks.
 ```
 
-The native framework label smoother is retained with next-token shifting explicitly enabled for
-Qwen3-VL SFT; padding/prompt labels masked with -100 retain the framework masking behavior.
-Val loss with label smoothing is not directly comparable with prior unsmoothed val loss.
+Label smoothing is disabled. Loss uses the default model/framework cross-entropy path,
+without a custom label smoother or next-token alignment override.
 
 ## Post-training checkpoint selection
 
