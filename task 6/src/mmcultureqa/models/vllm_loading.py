@@ -6,7 +6,7 @@ from ..common import image, messages, path
 from .family import model_type
 
 
-def load_vllm(cfg):
+def load_vllm(cfg, persistent=False):
     import torch
     if not torch.cuda.is_available():
         raise RuntimeError('vLLM inference requires a CUDA GPU')
@@ -26,7 +26,7 @@ def load_vllm(cfg):
         from swift.llm import VllmEngine, InferRequest, RequestConfig
     mc, ic = cfg['model'], cfg['inference']
     adapters, rank = [], cfg['peft']['r']
-    if mc.get('adapter'):
+    if mc.get('adapter') and not persistent:
         adapter = path(mc['adapter'])
         if not adapter.is_dir():
             from huggingface_hub import snapshot_download
@@ -38,6 +38,7 @@ def load_vllm(cfg):
         adapters = [str(adapter)]
     engine = VllmEngine(mc['name'], torch_dtype=getattr(torch, dtype), model_type=family, use_hf=True,
                         revision=mc.get('revision'), adapters=adapters, max_lora_rank=rank,
+                        enable_lora=persistent or bool(adapters), enable_sleep_mode=persistent,
                         max_model_len=ic['vllm_max_model_len'], max_num_seqs=ic['vllm_max_num_seqs'],
                         gpu_memory_utilization=ic['vllm_gpu_memory_utilization'],
                         engine_kwargs={'cpu_offload_gb': ic.get('vllm_cpu_offload_gb', 0),
@@ -51,7 +52,10 @@ def load_vllm(cfg):
                                            else meta.non_thinking_prefix)
     cfg['_dtype'] = dtype
 
-    def generate(rows):
+    def generate(rows, adapter_request=None):
+        ic = cfg['inference']
+        if persistent and adapter_request is None:
+            raise ValueError('Persistent validation requires an explicit current LoRA adapter')
         requests = []
         for row in rows:
             msg = messages(cfg, row['question'])
@@ -61,7 +65,8 @@ def load_vllm(cfg):
             temperature=ic.get('temperature', 0.8) if ic['do_sample'] else 0.0,
             top_p=ic.get('top_p'), top_k=ic.get('top_k'),
             repetition_penalty=ic.get('repetition_penalty'), presence_penalty=ic.get('presence_penalty', 0.),
-            seed=cfg['training']['seed']), use_tqdm=False)
+            seed=cfg['training']['seed']), use_tqdm=False,
+            **({'adapter_request': adapter_request} if adapter_request is not None else {}))
         answers = []
         for response in responses:
             if isinstance(response, Exception):
@@ -69,4 +74,6 @@ def load_vllm(cfg):
             answers.append(response.choices[0].message.content)
         return answers
 
+    if persistent:
+        generate.engine = engine.engine
     return generate

@@ -37,20 +37,25 @@ accurate answer in English. Followed by Question: {question}.
 1. Run native teacher-forced loss/token accuracy validation.
 2. Save a temporary snapshot of the CURRENT adapter; no held-out answer is fed to the VLM.
 3. Move training parameters, buffers, gradients and optimizer state to host RAM.
-4. Start a separate vLLM process, load BF16 base + current language adapter, generate greedily.
-5. Exit vLLM, then run the unchanged organizer scorer in a separate process.
+4. Initialize a persistent vLLM worker on the first eval only. Later evals wake the same engine.
+   The BF16 base stays fixed; each eval loads the CURRENT LoRA snapshot with a unique ID.
+5. Unload that adapter, clear prefix cache and sleep vLLM (level 1) BEFORE running the organizer scorer.
 6. Exit scorer, restore the original training tensors to their devices and continue training.
 
 F1 is returned to the framework for checkpoint selection. Tensor identity is preserved and
 devices are restored even on failure; child errors fail training rather than fabricate scores.
-This is single-GPU BF16-only orchestration, NOT a persistent sleeping vLLM engine. It reloads
-vLLM at every evaluation and repeats validation once for loss and once for generation.
-No second Qwen remains on GPU while training, but CPU RAM must hold the training state plus
-child-process memory. Sufficient host RAM is required. BF16 8B TRAINING can still exceed L4 VRAM;
+This is single-GPU BF16-only orchestration with persistent sleep/wake. Base initialization
+and compilation happen only on the first evaluation. It repeats validation once for loss and once
+for generation. New LoRA IDs and explicit unloading prevent cached adapters from going stale.
+The worker is closed on training completion, error or interruption before final export.
+Most vLLM GPU memory is released while training (CUDA context/other buffers may remain).
+CPU RAM must hold the sleeping vLLM base, offloaded training state and child-process memory. Sufficient host RAM is required. BF16 8B TRAINING can still exceed L4 VRAM;
 evaluation offload does not reduce training activations. GPU execution has not been validated locally.
 
 monitor.vllm controls memory utilization (0.9), max context (2048), concurrency (2),
-CPU weight offload (4 GiB), and eager execution. CPU offload slows generation; use 0 if it fits.
+CPU weight offload (0 GiB), and eager execution. Generation runs entirely on GPU. Sleep between
+evaluations is separate: it backs up weights in RAM to release VRAM, then restores them on wake.
+Without CPU weight offload, 8B BF16 inference must fit on the GPU; this has not been benchmarked.
 Keep TRAIN_PROJECTOR=False: vLLM adapter evaluation supports language LoRA in this recipe.
 Native predict_with_generate stays false: the custom evaluation integration invokes vLLM instead.
 

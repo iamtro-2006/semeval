@@ -217,9 +217,10 @@ def train(cfg, stage):
 
     class Pipeline(cls):
         def train(self, trainer):
+            validation_worker = None
             if stage == 'sft' and cfg['monitor'].get('backend') == 'vllm':
                 from .vllm_validation import install_validation
-                install_validation(trainer, cfg, self.processor)
+                validation_worker = install_validation(trainer, cfg, self.processor)
             trainer.add_callback(AdapterMetadata())
             for callback in checkpoint_callbacks():
                 trainer.add_callback(callback)
@@ -232,7 +233,11 @@ def train(cfg, stage):
                 raise RuntimeError('Projector LoRA requested but no projector parameters are trainable')
             cfg['_projector_trainable_parameters'] = projector_params
             provenance(cfg, native['output_dir'])
-            result = super().train(trainer)
+            try:
+                result = super().train(trainer)
+            finally:
+                if validation_worker is not None:
+                    validation_worker.close()
             final = Path(native['output_dir']) / 'final'
             trainer.save_model(str(final))
             if trainer.is_world_process_zero():

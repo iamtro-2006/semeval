@@ -59,7 +59,7 @@ monitor:
     vllm_gpu_memory_utilization: 0.9
     vllm_max_model_len: 2048
     vllm_max_num_seqs: 2
-    vllm_cpu_offload_gb: 4
+    vllm_cpu_offload_gb: 0
     vllm_enforce_eager: true
   model: jhu-clsp/mmBERT-base
   revision: c5955035435e2bf121cde7f3c8863ef52ff35d82

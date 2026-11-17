@@ -850,26 +850,115 @@ print(ROOT)
                 yield
             finally:
                 events.append('restore')
+        def generate(config):
+            events.append('generate')
+            child_cfg = json.loads(Path(config).read_text())
+            self.assertFalse(child_cfg['model']['load_in_4bit'])
+            self.assertFalse(child_cfg['inference']['do_sample'])
+            self.assertEqual(child_cfg['model']['adapter_revision'], None)
+            write_jsonl(child_cfg['inference']['output'], [{'id': 'val-1', 'answer': 'Answer'}])
         def child(cmd, **kw):
-            self.assertEqual(events[-1] if len(events) == 1 else events[0], 'offload')
-            if 'mmcultureqa.inference.predict' in cmd:
-                events.append('generate')
-                child_cfg = json.loads(Path(cmd[-1]).read_text())
-                self.assertFalse(child_cfg['model']['load_in_4bit'])
-                self.assertFalse(child_cfg['inference']['do_sample'])
-                self.assertEqual(child_cfg['model']['adapter_revision'], None)
-                write_jsonl(child_cfg['inference']['output'], [{'id': 'val-1', 'answer': 'Answer'}])
-            else:
-                events.append('score')
-                Path(cmd[-1]).write_text(json.dumps({'result': [{'en': {'BERTScore-F1': 0.87}}]}))
+            self.assertEqual(events[0], 'offload')
+            self.assertIn('mmcultureqa.score', cmd)
+            events.append('score')
+            Path(cmd[-1]).write_text(json.dumps({'result': [{'en': {'BERTScore-F1': 0.87}}]}))
         (self.project / cfg['training']['output_dir']).mkdir(parents=True, exist_ok=True)
         processor = SimpleNamespace(save_pretrained=lambda _: None)
         with patch('mmcultureqa.training.vllm_validation.training_on_cpu', swapped), \
-             patch('mmcultureqa.training.vllm_validation.subprocess.run', side_effect=child):
+             patch('mmcultureqa.training.vllm_validation.subprocess.run', side_effect=child), \
+             patch('mmcultureqa.training.vllm_validation.PersistentValidationWorker') as worker:
+            worker.return_value.predict.side_effect = generate
             install_validation(trainer, cfg, processor)
             metrics = trainer.evaluate()
         self.assertEqual(metrics, {'eval_loss': 0.8, 'eval_bertscore_f1': 0.87})
         self.assertEqual(events[:4], ['offload', 'generate', 'score', 'restore'])
+
+    def test_persistent_vllm_reuses_base_and_refreshes_lora_then_sleeps(self):
+        self.grpo_config()
+        from mmcultureqa.common import config, write_jsonl, read_jsonl
+        from mmcultureqa.training.vllm_worker import ValidationSession
+        with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft.yaml')]):
+            cfg = config()
+        cfg['model']['load_in_4bit'] = False
+        cfg['inference'] = dict(output=str(self.project / 'pred.jsonl'), batch_size=8,
+                                vllm_cpu_offload_gb=0)
+        events = []
+        requests = []
+        engine = MagicMock()
+        engine.list_loras.return_value = {1}
+        engine.wake_up.side_effect = lambda: events.append('wake')
+        engine.remove_lora.side_effect = lambda i: events.append('unload')
+        engine.sleep.side_effect = lambda **k: events.append('sleep')
+        def generate(rows, adapter_request=None):
+            events.append('generate')
+            requests.append(adapter_request)
+            return [Path(adapter_request.path).name for _ in rows]
+        generate.engine = engine
+        modules = {'swift': SimpleNamespace(), 'swift.llm': SimpleNamespace(
+            AdapterRequest=lambda name, path: SimpleNamespace(name=name, path=path))}
+        with patch.dict(sys.modules, modules), \
+             patch('mmcultureqa.models.vllm_loading.load_vllm', return_value=generate) as factory:
+            session = ValidationSession(cfg)
+            for name in ('step125', 'step250'):
+                adapter = self.project / name
+                adapter.mkdir()
+                (adapter / 'adapter_config.json').write_text(json.dumps({
+                    'base_model_name_or_path': cfg['model']['name'], 'r': 16}))
+                cfg['model']['adapter'] = str(adapter)
+                session.predict(cfg)
+                self.assertEqual(read_jsonl(cfg['inference']['output'])[0]['answer'], name)
+            session.close()
+        factory.assert_called_once()
+        self.assertTrue(factory.call_args.kwargs['persistent'])
+        self.assertNotEqual(requests[0].name, requests[1].name)
+        self.assertEqual(events, ['generate', 'unload', 'sleep', 'wake', 'generate', 'unload', 'sleep'])
+        engine.engine_core.shutdown.assert_called_once()
+
+    def test_persistent_vllm_sleeps_on_generation_error_and_rejects_changed_base(self):
+        self.grpo_config()
+        from mmcultureqa.common import config
+        from mmcultureqa.training.vllm_worker import ValidationSession
+        with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft.yaml')]):
+            cfg = config()
+        cfg['inference'] = dict(output=str(self.project / 'pred.jsonl'), batch_size=8)
+        adapter = self.project / 'snapshot'
+        adapter.mkdir()
+        (adapter / 'adapter_config.json').write_text(json.dumps({
+            'base_model_name_or_path': cfg['model']['name'], 'r': 16}))
+        cfg['model']['adapter'] = str(adapter)
+        generate = MagicMock(side_effect=RuntimeError('bad generation'))
+        generate.engine.list_loras.return_value = {7}
+        modules = {'swift': SimpleNamespace(), 'swift.llm': SimpleNamespace(
+            AdapterRequest=lambda name, path: SimpleNamespace(name=name, path=path))}
+        with patch.dict(sys.modules, modules), \
+             patch('mmcultureqa.models.vllm_loading.load_vllm', return_value=generate):
+            session = ValidationSession(cfg)
+            with self.assertRaisesRegex(RuntimeError, 'bad generation'):
+                session.predict(cfg)
+            generate.engine.remove_lora.assert_called_once_with(7)
+            generate.engine.sleep.assert_called_once_with(level=1)
+            cfg['model']['revision'] = 'different'
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                session.predict(cfg)
+            session.close()
+
+    def test_validation_worker_acknowledges_only_after_sleep_and_closes_on_stop(self):
+        self.grpo_config()
+        from mmcultureqa.training.vllm_worker import serve
+        file = self.project / 'worker-config.json'
+        file.write_text('{}')
+        connection = MagicMock()
+        connection.recv.side_effect = [dict(command='predict', config=str(file)),
+                                       dict(command='predict', config=str(file)), dict(command='stop')]
+        events = []
+        with patch('mmcultureqa.training.vllm_worker.ValidationSession') as factory:
+            factory.return_value.predict.side_effect = lambda _: events.append('generate-and-sleep')
+            factory.return_value.close.side_effect = lambda: events.append('close')
+            connection.send.side_effect = lambda _: events.append('ack')
+            serve(connection)
+            factory.assert_called_once()
+        self.assertEqual(events, ['generate-and-sleep', 'ack', 'generate-and-sleep', 'ack', 'close'])
+        connection.close.assert_called_once()
 
     def test_cpu_swap_restores_devices_after_failed_generation(self):
         sys.path.insert(0, str(self.project / 'src'))
@@ -956,6 +1045,30 @@ print(ROOT)
         self.assertEqual(request_config.call_args.kwargs['presence_penalty'], 1.5)
         self.assertEqual(request_config.call_args.kwargs['top_p'], 0.8)
 
+
+    def test_persistent_loader_enables_sleep_and_requires_explicit_lora(self):
+        cfg = self.grpo_config()
+        from mmcultureqa.models.vllm_loading import load_vllm
+        cfg['model'].update(dtype='bfloat16', load_in_4bit=False, adapter=None)
+        cfg['inference'] = dict(max_new_tokens=256, do_sample=False, vllm_max_model_len=2048,
+            vllm_max_num_seqs=2, vllm_gpu_memory_utilization=0.9, vllm_cpu_offload_gb=0)
+        factory = MagicMock()
+        factory.return_value.infer.return_value = []
+        modules = {'torch': SimpleNamespace(bfloat16='bf16', cuda=SimpleNamespace(
+            is_available=lambda: True, is_bf16_supported=lambda: True)),
+            'swift': SimpleNamespace(), 'swift.llm': SimpleNamespace(VllmEngine=factory,
+                InferRequest=lambda **k: k, RequestConfig=lambda **k: k)}
+        request = object()
+        with patch.dict(sys.modules, modules):
+            generate = load_vllm(cfg, persistent=True)
+            with self.assertRaisesRegex(ValueError, 'explicit'):
+                generate([])
+            self.assertEqual(generate([], adapter_request=request), [])
+        self.assertTrue(factory.call_args.kwargs['enable_sleep_mode'])
+        self.assertTrue(factory.call_args.kwargs['enable_lora'])
+        self.assertEqual(factory.call_args.kwargs['adapters'], [])
+        self.assertEqual(factory.call_args.kwargs['engine_kwargs']['cpu_offload_gb'], 0)
+        self.assertIs(factory.return_value.infer.call_args.kwargs['adapter_request'], request)
 
     def test_cot_prompt_survives_model_restore_and_format_failures_count_as_empty(self):
         self.grpo_config()

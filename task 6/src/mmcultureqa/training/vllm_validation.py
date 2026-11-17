@@ -11,6 +11,7 @@ from pathlib import Path
 from types import MethodType
 
 from ..common import ROOT, path, read_jsonl, write_jsonl
+from .vllm_worker import PersistentValidationWorker
 
 
 @contextmanager
@@ -65,6 +66,7 @@ def install_validation(trainer, cfg, processor):
     if cfg['peft'].get('train_projector'):
         raise ValueError('vLLM adapter validation requires language-only LoRA; disable train_projector')
     original = trainer.evaluate
+    worker = PersistentValidationWorker()
 
     def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix='eval', **kwargs):
         # Native teacher-forced validation retains loss/token accuracy and their progress bar.
@@ -95,17 +97,20 @@ def install_validation(trainer, cfg, processor):
                 output=str(work / 'predictions.jsonl'), **cfg['monitor'].get('vllm', {}))
             config = work / 'config.json'
             config.write_text(json.dumps(child, ensure_ascii=False), encoding='utf-8')
-            # Generation exits BEFORE the scorer starts; both exit before training returns to GPU.
+            # Worker acknowledges only once generation finishes and vLLM is sleeping in RAM.
             with training_on_cpu(self):
-                subprocess.run([sys.executable, '-u', '-m', 'mmcultureqa.inference.predict',
-                                '--config', str(config)], cwd=ROOT, check=True)
-                predicted = read_jsonl(work / 'predictions.jsonl')
-                if len(predicted) != len(validation) or {r['id'] for r in predicted} != {r['id'] for r in validation}:
-                    raise ValueError('Periodic vLLM predictions do not cover validation exactly')
-                subprocess.run([sys.executable, '-u', '-m', 'mmcultureqa.score',
-                    '--dtype', cfg['monitor']['dtype'], '--gold', str(work / 'validation.jsonl'),
-                    '--pred', str(work / 'predictions.jsonl'), '--lang', 'en',
-                    '--out', str(work / 'scores.json')], cwd=ROOT, check=True)
+                try:
+                    worker.predict(config)
+                    predicted = read_jsonl(work / 'predictions.jsonl')
+                    if len(predicted) != len(validation) or {r['id'] for r in predicted} != {r['id'] for r in validation}:
+                        raise ValueError('Periodic vLLM predictions do not cover validation exactly')
+                    subprocess.run([sys.executable, '-u', '-m', 'mmcultureqa.score',
+                        '--dtype', cfg['monitor']['dtype'], '--gold', str(work / 'validation.jsonl'),
+                        '--pred', str(work / 'predictions.jsonl'), '--lang', 'en',
+                        '--out', str(work / 'scores.json')], cwd=ROOT, check=True)
+                except BaseException:
+                    worker.close()
+                    raise
             report = json.loads((work / 'scores.json').read_text(encoding='utf-8'))
             blocks = [scores for block in report['result'] for scores in block.values()
                       if isinstance(scores, dict) and 'BERTScore-F1' in scores]
@@ -117,3 +122,4 @@ def install_validation(trainer, cfg, processor):
         return metrics
 
     trainer.evaluate = MethodType(evaluate, trainer)
+    return worker
