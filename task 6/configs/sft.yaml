@@ -43,7 +43,7 @@ training:
   logging_steps: 5
   eval_strategy: steps
   eval_steps: 200
-  save_steps: 225
+  save_steps: 200
   save_total_limit: null  # retain every checkpoint for post-training merged-model selection
   load_best_model_at_end: false
   metric_for_best_model: eval_loss
