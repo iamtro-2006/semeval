@@ -289,6 +289,7 @@ def experiment03_profile(cells, inference=False):
             source = source.replace('USE_4BIT = True', 'USE_4BIT = False', 1)
             source = source.replace("upload_filters('run')", "upload_filters('merged_run')")
             if inference:
+                source = source.replace("RUN_NAME = 'experiment03'", "RUN_NAME = 'experiment07'", 1)
                 source = source.replace('USE_4BIT = True', 'USE_4BIT = False', 1)
             # This profile exports a complete BF16 model; legacy adapter launcher belongs to GRPO.
             source = source.partition('\ndef run(module, config, overrides, local_output, cloud_subdir):')[0]
@@ -307,6 +308,13 @@ After training exits, merge the selected local adapter into a fresh BF16 base an
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
 Use the same ROOT_FOLDER_ID and RUN_NAME for SFT and inference. GRPO is unchanged and deferred.
+''')
+            if inference:
+                cell = md('''## Inference settings · experiment07
+Default RUN_NAME is experiment07. Use the same ROOT_FOLDER_ID as the SFT notebook.
+INPUT_RUN_NAME selects the merged model and the local/Drive destination for predictions and scores.
+Both Qwen3-VL-4B and Qwen3-VL-8B use BF16 merged-model generation through vLLM.
+The exported model restores the training prompt and image preprocessing automatically.
 ''')
         result.append(cell)
     return result
@@ -469,7 +477,7 @@ Supports merged Qwen3-VL-4B and Qwen3-VL-8B checkpoints.
 Set INPUT_RUN_NAME to the training run to download; model family and prompt restore from that artifact.
 Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
-'''), code('''INPUT_RUN_NAME = RUN_NAME  # experiment03 / experiment05_qwen3vl8b
+'''), code('''INPUT_RUN_NAME = RUN_NAME  # defaults to experiment07; select another SFT run here if needed
 MODEL_STAGE = SFT_STAGE
 SPLIT = 'devtest'
 TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test

@@ -183,8 +183,9 @@ print(ROOT)
         self.assertEqual(commands[0][2], 'mmcultureqa.training.grpo')
         self.assertEqual(self.copy_options[1], tuple(upload_filters('run')))
 
-    def test_inference_downloads_only_merged_experiment03_model(self):
+    def test_inference_downloads_and_uploads_selected_experiment07_model(self):
         ns, commands, copies = self.experiment('04_inference_colab')
+        self.assertEqual(ns['RUN_NAME'], 'experiment07')
         exec(find_cell('04_inference_colab', 'INPUT_RUN_NAME ='), ns)
         predictions = ns['predictions']
         self.assertTrue((predictions / 'sft_devtest.jsonl').is_file())
@@ -198,9 +199,21 @@ print(ROOT)
         self.assertIn('model.load_in_4bit=false', commands[0])
         self.assertIn('model.local_files_only=true', commands[0])
         self.assertIn('model.adapter=null', commands[0])
-        self.assertIn('remote:task6-runs/experiment03/sft/best_model', copies[0])
+        self.assertIn('remote:task6-runs/experiment07/sft/best_model', copies[0])
+        self.assertEqual(predictions, self.project / 'outputs/runs/experiment07/predictions')
+        self.assertEqual(uploads[0][1], 'remote:task6-runs/experiment07/predictions')
         from mmcultureqa.storage import upload_filters
         self.assertEqual(self.copy_options[1], tuple(upload_filters('predictions')))
+
+    def test_inference_selected_run_overrides_stale_shared_run(self):
+        ns, commands, copies = self.experiment('04_inference_colab')
+        ns['RUN_NAME'] = 'experiment03'
+        source = find_cell('04_inference_colab', 'INPUT_RUN_NAME =').replace(
+            'INPUT_RUN_NAME = RUN_NAME', "INPUT_RUN_NAME = 'experiment07'")
+        exec(source, ns)
+        self.assertEqual(ns['predictions'], self.project / 'outputs/runs/experiment07/predictions')
+        self.assertEqual(copies[0][0], 'remote:task6-runs/experiment07/sft/best_model')
+        self.assertEqual(copies[-1][1], 'remote:task6-runs/experiment07/predictions')
 
     def test_upload_allowlists_keep_only_selected_artifacts(self):
         sys.path.insert(0, str(self.project / 'src'))

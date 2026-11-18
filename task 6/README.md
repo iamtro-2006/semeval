@@ -86,6 +86,7 @@ Resume training uses a full LOCAL checkpoint-N. Use a fresh RUN_NAME for a new e
 Notebook 04 downloads task6-runs/<INPUT_RUN_NAME>/<MODEL_STAGE>/best_model from the configured
 Drive root. Model family, prompt and image preprocessing restore from the exported artifact.
 Predictions and uploads use INPUT_RUN_NAME, avoiding collisions between 4B and 8B results.
+Notebook 04 defaults to experiment07; choose another INPUT_RUN_NAME to change both model source and result destination.
 Use devtest/test there; validation belongs to SFT. Unlabelled splits cannot be scored locally.
 Inference vLLM settings live in configs/inference.yaml; CPU offload is configurable without file patching.
 Never bypass prediction signature checks to resume another model into an existing output file.
