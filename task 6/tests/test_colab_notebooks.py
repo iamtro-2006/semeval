@@ -377,7 +377,7 @@ print(ROOT)
         self.assertEqual(records[0]['solution'], 'train-gold')
         self.assertNotIn('train-gold', json.dumps(records[0]['messages']))
 
-    def test_native_sft_selects_generated_f1_every_125_steps(self):
+    def test_native_sft_uses_requested_defaults_and_dev_loss_every_200_steps(self):
         self.grpo_config()  # create disjoint train/validation fixture manifests
         from mmcultureqa.common import config
         from mmcultureqa.training.swift_backend import build_arguments
@@ -402,12 +402,12 @@ print(ROOT)
         self.assertFalse(args['greater_is_better'])
         self.assertIsNone(args['save_total_limit'])
         self.assertFalse(args['load_best_model_at_end'])
-        self.assertEqual(args['num_train_epochs'], 1.2)
-        self.assertEqual(args['learning_rate'], cfg['training']['learning_rate'])
+        self.assertEqual(args['num_train_epochs'], 1.5)
+        self.assertEqual(args['learning_rate'], 3e-4)
         self.assertEqual(args['label_smoothing_factor'], 0.0)
-        self.assertEqual(args['lora_rank'], 32)
-        self.assertEqual(args['lora_alpha'], 64)
-        self.assertEqual(args['eval_steps'], 125)
+        self.assertEqual(args['lora_rank'], 8)
+        self.assertEqual(args['lora_alpha'], 16)
+        self.assertEqual(args['eval_steps'], 200)
         self.assertEqual(args['save_steps'], 225)
         self.assertEqual(args['per_device_train_batch_size'], 4)
         self.assertEqual(args['gradient_accumulation_steps'], 2)
@@ -943,7 +943,7 @@ print(ROOT)
                 adapter = self.project / name
                 adapter.mkdir()
                 (adapter / 'adapter_config.json').write_text(json.dumps({
-                    'base_model_name_or_path': cfg['model']['name'], 'r': 16}))
+                    'base_model_name_or_path': cfg['model']['name'], 'r': cfg['peft']['r']}))
                 cfg['model']['adapter'] = str(adapter)
                 session.predict(cfg)
                 self.assertEqual(read_jsonl(cfg['inference']['output'])[0]['answer'], name)
@@ -964,7 +964,7 @@ print(ROOT)
         adapter = self.project / 'snapshot'
         adapter.mkdir()
         (adapter / 'adapter_config.json').write_text(json.dumps({
-            'base_model_name_or_path': cfg['model']['name'], 'r': 16}))
+            'base_model_name_or_path': cfg['model']['name'], 'r': cfg['peft']['r']}))
         cfg['model']['adapter'] = str(adapter)
         generate = MagicMock(side_effect=RuntimeError('bad generation'))
         generate.engine.list_loras.return_value = {7}

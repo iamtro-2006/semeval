@@ -41,11 +41,11 @@ train manifest changes.
 
 ## Shared recipe
 
-BF16 frozen base + language LoRA (not NF4): r=32, alpha=64, dropout=0.05, attention q/k/v/o
+BF16 frozen base + language LoRA (not NF4): r=8, alpha=16, dropout=0.05, attention q/k/v/o
 and MLP gate/up/down. Microbatch 4, accumulation 2, effective batch 8 on one GPU.
-1.2 epochs, peak LR 1e-5, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.0 (disabled).
-Save every 225 optimizer steps; evaluate loss every 125 steps. SFT_OVERRIDES can change these explicitly.
-During training, full official dev validation computes loss/token accuracy at step 0 and every 125 steps.
+1.5 epochs, peak LR 3e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.0 (disabled).
+Save every 225 optimizer steps; evaluate loss every 200 steps. SFT_OVERRIDES can change these explicitly.
+During training, full official dev validation computes loss/token accuracy at step 0 and every 200 steps.
 There is NO vLLM, generation F1, scorer, sleep/wake or CPU model swapping during SFT.
 All checkpoints are retained (save_total_limit=null); the trainer does not restore a provisional best.
 

@@ -296,7 +296,7 @@ def experiment03_profile(cells, inference=False):
             cell = code(source)
         elif source.startswith('## Experiment settings'):
             cell = md('''## Experiment 03 settings
-SFT trains BF16 LoRA (r=32, alpha=64) with microbatch 4 and accumulation 2.
+SFT trains BF16 LoRA (r=8, alpha=16) with microbatch 4 and accumulation 2.
 Training logs loss/token accuracy only; it NEVER starts vLLM or mmBERT.
 Train on the full official train split; use the official labelled dev split for all validation.
 Retain every checkpoint. After training exits, merge each checkpoint and generate full dev predictions.
@@ -304,7 +304,7 @@ Selection uses the same merged-model vLLM path/settings as notebook 04, with CUD
 No runtime LoRA, sleep/wake or CPU weight offload during generation.
 Only one temporary merged candidate is kept at a time; export the F1 winner at the end.
 BF16 8B training may require more VRAM than an L4.
-Default 1.2 epochs, peak learning rate 1e-5 (3% warmup), label smoothing disabled, eval every 125 steps; save every 225 optimizer steps.
+Default 1.5 epochs, peak learning rate 3e-4 (3% warmup), label smoothing disabled, eval every 200 steps; save every 225 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
@@ -326,7 +326,7 @@ BF16 LoRA; training uses teacher-forced loss/token accuracy only. No vLLM during
 BF16 base; microbatch 4 x accumulation 2 preserves effective batch 8 on one GPU.
 Train on the full official train split; no holdout is removed from train.
 Save every 225 steps; retain ALL checkpoints. Periodic loss/token accuracy uses the full official dev split.
-After 1.2 training epochs, merge and score each checkpoint on all official dev questions.
+After 1.5 training epochs, merge and score each checkpoint on all official dev questions.
 Select the highest dev merged-model F1, then export that winner as best_model/.
 Reports stay in validation/; evaluation.json and selection.json explicitly identify the split as dev.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
