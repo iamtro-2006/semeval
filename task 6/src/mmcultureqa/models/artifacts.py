@@ -35,6 +35,7 @@ def configure_merged_model(cfg, folder, load_in_4bit=False):
     folder = require_merged_model(folder)
     cfg = copy.deepcopy(cfg)
     saved = json.loads((folder / 'run_config.json').read_text(encoding='utf-8'))
+    cfg['_model_signature'] = json.loads((folder / 'merge.json').read_text(encoding='utf-8'))['signature']
     cfg['model'].update(name=str(folder), revision=None, adapter=None, adapter_revision=None,
                         processor=str(folder), processor_revision=None, dtype='bfloat16',
                         load_in_4bit=load_in_4bit, local_files_only=True, merged_model=True)

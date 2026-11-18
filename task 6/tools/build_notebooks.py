@@ -298,12 +298,13 @@ def experiment03_profile(cells, inference=False):
             cell = md('''## Experiment 03 settings
 SFT trains BF16 LoRA (r=32, alpha=64) with microbatch 4 and accumulation 2.
 Training logs loss/token accuracy only; it NEVER starts vLLM or mmBERT.
-Retain every checkpoint. After training exits, merge each checkpoint and generate full validation.
+Train on the full official train split; use the official labelled dev split for all validation.
+Retain every checkpoint. After training exits, merge each checkpoint and generate full dev predictions.
 Selection uses the same merged-model vLLM path/settings as notebook 04, with CUDA graphs enabled.
 No runtime LoRA, sleep/wake or CPU weight offload during generation.
 Only one temporary merged candidate is kept at a time; export the F1 winner at the end.
 BF16 8B training may require more VRAM than an L4.
-Default 1.2 epochs, peak learning rate 2e-4 (3% warmup), label smoothing disabled, eval every 125 steps; save every 225 optimizer steps.
+Default 1.2 epochs, peak learning rate 1e-5 (3% warmup), label smoothing disabled, eval every 125 steps; save every 225 optimizer steps.
 After training exits, merge the selected local adapter into a fresh BF16 base and upload best_model/.
 Final validation and test inference use that complete BF16 model via vLLM in a separate process.
 Drive uploads exclude local adapters, intermediate checkpoints, optimizer and temporary files.
@@ -323,9 +324,11 @@ The exported model restores the training prompt and image preprocessing automati
 sft_notebook = experiment03_profile(gpu_setup) + [md('''## SFT only · experiment03
 BF16 LoRA; training uses teacher-forced loss/token accuracy only. No vLLM during training.
 BF16 base; microbatch 4 x accumulation 2 preserves effective batch 8 on one GPU.
-Save every 225 steps (6 checkpoints over 1350 steps); retain ALL checkpoints. Periodic loss/token accuracy uses full validation.
-After 1.2 training epochs, merge and score each checkpoint on all 1,000 validation questions.
-Select the highest merged-model F1, then export that winner as best_model/.
+Train on the full official train split; no holdout is removed from train.
+Save every 225 steps; retain ALL checkpoints. Periodic loss/token accuracy uses the full official dev split.
+After 1.2 training epochs, merge and score each checkpoint on all official dev questions.
+Select the highest dev merged-model F1, then export that winner as best_model/.
+Reports stay in validation/; evaluation.json and selection.json explicitly identify the split as dev.
 Language LoRA already covers q/k/v/o plus gate/up/down projections, not only key/value.
 ViT stays frozen; final inference uses a merged model without runtime LoRA.
 best_model/ is a complete BF16 checkpoint, not a 4-bit checkpoint or a standalone adapter.
@@ -425,9 +428,9 @@ print('GRPO adapter on Drive:', cloud(f'task6-runs/{RUN_NAME}/{GRPO_STAGE}/final
 ''')]
 
 def final_validation(run_variable, stage_variable, merged=False):
-    result = [md('''## Final held-out validation score
+    result = [md('''## Final development score
 Generate answers with the saved final adapter and score with the unchanged official scorer.
-Default: ALL 1,000 validation examples, even after a one-step training smoke run.
+Default: ALL official dev examples, even after a one-step training smoke run.
 Set VAL_LIMIT=4 only to smoke-test evaluation; subset results are explicitly marked.
 BERTScore-F1 is the ranking metric, not exact-match accuracy. No weights are updated.
 '''), code('''VAL_LIMIT = None  # full validation; optionally 4 for an evaluation smoke test
@@ -475,14 +478,15 @@ Model and processor loading are local-files-only; missing files raise an error i
 Uses the saved prompt and preprocessing from the exported training run.
 Supports merged Qwen3-VL-4B and Qwen3-VL-8B checkpoints.
 Set INPUT_RUN_NAME to the training run to download; model family and prompt restore from that artifact.
-Validation scoring belongs to the SFT/GRPO notebooks. This notebook accepts test splits only.
+Set SPLIT='dev' to reproduce development scoring, or 'devtest' for the final submission.
+The shared raw data already contains both splits; rerun preparation without uploading data again.
 Current devtest is unlabelled: generate predictions to submit; no local score can be computed.
 '''), code('''INPUT_RUN_NAME = RUN_NAME  # defaults to experiment07; select another SFT run here if needed
 MODEL_STAGE = SFT_STAGE
-SPLIT = 'devtest'
+SPLIT = 'devtest'  # 'dev' for development scoring; 'devtest' for final submission
 TEST_LIMIT = None  # full split; optionally 4 for an inference smoke test
-if SPLIT not in {'devtest', 'test'}:
-    raise ValueError('Use devtest/test here; validation is evaluated in the training notebooks')
+if SPLIT not in {'dev', 'devtest'}:
+    raise ValueError('Use dev for development scoring or devtest for final submission')
 if not re.fullmatch(r'[A-Za-z0-9_-]+', INPUT_RUN_NAME) or MODEL_STAGE not in {'sft', 'sft-smoke'}:
     raise ValueError('Choose a valid SFT run and stage')
 from mmcultureqa.models.artifacts import require_merged_model
@@ -496,6 +500,8 @@ overrides = {'model.name': str(local_model), 'model.revision': None, 'model.adap
              'model.adapter_revision': None, 'model.processor': str(local_model),
              'model.processor_revision': None, 'model.local_files_only': True, 'model.merged_model': True,
              'model.dtype': 'bfloat16', 'model.load_in_4bit': False,
+             'training.seed': saved.get('training', {}).get('seed', 42),
+             'inference.max_new_tokens': saved.get('monitor', {}).get('max_new_tokens', 256),
              'inference.backend': 'vllm', 'inference.split': SPLIT,
              'inference.output': str(prediction_file), 'data.limit': TEST_LIMIT}
 run_command('mmcultureqa.inference.predict', 'configs/inference.yaml', overrides)
@@ -509,7 +515,8 @@ if TEST_LIMIT is not None:
 if test_rows and all(row.get('answer') for row in test_rows):
     gold = predictions / f'{SPLIT}_gold_en.jsonl'
     write_jsonl(gold, test_rows)
-    stream_run([sys.executable, '-m', 'mmcultureqa.score', '--dtype', 'float16',
+    stream_run([sys.executable, '-m', 'mmcultureqa.score',
+                '--dtype', saved.get('monitor', {}).get('dtype', 'float16'),
                 '--gold', str(gold), '--lang', 'en', '--pred', str(prediction_file),
                 '--out', str(predictions / f'sft_{SPLIT}_scores.json')], check=True)
     upload_predictions(predictions, f'task6-runs/{INPUT_RUN_NAME}/predictions')

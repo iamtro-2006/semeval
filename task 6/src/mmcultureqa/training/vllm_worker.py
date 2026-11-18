@@ -57,7 +57,8 @@ class ValidationSession:
             # A new name means a new LoRA ID in Swift; never reuse a cached adapter identity.
             request = AdapterRequest('validation-' + uuid.uuid4().hex, str(adapter))
             print(f'[validation] Current LoRA: {request.name} -> {adapter}', flush=True)
-            rows = read_jsonl(path(cfg['data']['manifest_dir']) / 'validation.jsonl')
+            split = cfg['inference'].get('split', cfg['data']['eval_split'])
+            rows = read_jsonl(path(cfg['data']['manifest_dir']) / f'{split}.jsonl')
             output = []
             batch_size = cfg['inference']['batch_size']
             with tqdm(total=len(rows), desc='Validation vLLM', unit='question', dynamic_ncols=True) as bar:

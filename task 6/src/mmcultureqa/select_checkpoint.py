@@ -43,14 +43,15 @@ def f1_from_report(file):
 def select_checkpoint(run_dir):
     run = path(run_dir).resolve()
     cfg = json.loads((run / 'run.json').read_text(encoding='utf-8'))
-    if cfg['data']['eval_split'] != 'validation':
-        raise ValueError('Checkpoint selection must use validation, never devtest/test')
+    split = cfg['data']['eval_split']
+    if split not in {'dev', 'validation'}:
+        raise ValueError('Checkpoint selection requires dev (or legacy validation), never devtest/test')
     candidates = sorted([p for p in run.glob('checkpoint-*')
                          if p.is_dir() and re.fullmatch(r'checkpoint-\d+', p.name)],
                         key=lambda p: int(p.name.split('-')[-1]))
     if not candidates:
         raise FileNotFoundError('No checkpoint-N directories; retain checkpoints during training')
-    total = len(read_jsonl(path(cfg['data']['manifest_dir']) / 'validation.jsonl'))
+    total = len(read_jsonl(path(cfg['data']['manifest_dir']) / f'{split}.jsonl'))
     results = run / 'checkpoint_selection'
     results.mkdir(exist_ok=True)
     ranking = []
@@ -79,7 +80,7 @@ def select_checkpoint(run_dir):
                 # No training process, LoRA runtime or sleeping engine is present on the GPU.
                 execute('mmcultureqa.evaluate', '--run-dir', folder, '--backend', 'vllm')
                 summary = json.loads(evaluation.read_text(encoding='utf-8'))
-                if (not summary['full_validation'] or summary['evaluated_rows'] != total
+                if (summary['split'] != split or not summary['full_validation'] or summary['evaluated_rows'] != total
                         or summary['model_artifact'] != 'merged_bf16'):
                     raise ValueError('Candidate was not evaluated as a merged model on full validation')
                 f1_from_report(scores)
@@ -96,9 +97,9 @@ def select_checkpoint(run_dir):
 
     # Stable tie break: keep the earliest checkpoint at the same rounded organizer F1.
     winner = max(ranking, key=lambda item: (item['bertscore_f1'], -item['step']))
-    selection = dict(stage='sft', selection_method='post_training_merged_vllm_full_validation',
+    selection = dict(stage='sft', eval_split=split, selection_method=f'post_training_merged_vllm_full_{split}',
         best_model_checkpoint=winner['checkpoint'], best_metric=winner['bertscore_f1'],
-        metric_for_best_model='validation_bertscore_f1', evaluated_rows=total, candidates=ranking)
+        metric_for_best_model=f'{split}_bertscore_f1', evaluated_rows=total, candidates=ranking)
     (run / 'selection.json').write_text(json.dumps(selection, indent=2), encoding='utf-8')
     # Only one final merged model remains on disk. Reload the winning adapter once more.
     execute('mmcultureqa.export', '--run-dir', run, '--adapter', winner['checkpoint'])

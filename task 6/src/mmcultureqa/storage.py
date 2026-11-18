@@ -27,7 +27,7 @@ def upload_filters(kind):
     elif kind == 'predictions':
         rules = []
         for stage in ('sft', 'grpo'):
-            for split in ('devtest', 'test'):
+            for split in ('dev', 'devtest', 'test'):
                 name = f'{stage}_{split}'
                 rules.extend((f'+ /{name}.jsonl', f'+ /{name}/run.json', f'+ /{name}_scores.json',
                               f'+ /{name}.traces.jsonl'))

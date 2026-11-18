@@ -34,7 +34,8 @@ def main():
     # Fingerprint BEFORE loading/mutating runtime config; prevents mixed model/prompt outputs.
     signature = hashlib.sha256(json.dumps({'model': cfg['model'], 'prompt': path(cfg['prompt_file']).read_text(encoding='utf-8'),
         'system': cfg.get('system_prompt'), 'generation': {k: v for k, v in ic.items() if k not in ('output', 'resume')},
-        'rows': rows}, sort_keys=True).encode()).hexdigest()
+        'model_signature': cfg.get('_model_signature'), 'seed': cfg['training']['seed'],
+        'reasoning': reasoning, 'rows': rows}, sort_keys=True).encode()).hexdigest()
     stamp = output.with_suffix('.signature')
     done = set()
     if output.exists():
@@ -75,7 +76,7 @@ def main():
     provenance(cfg, output.parent / output.stem)
     from tqdm import tqdm
     with output.open('a', encoding='utf-8') as handle, tqdm(
-            total=len(rows), initial=len(done), desc='Validation' if ic['split'] == 'validation' else 'Inference',
+            total=len(rows), initial=len(done), desc='Validation' if ic['split'] in {'dev', 'validation'} else 'Inference',
             unit='question', dynamic_ncols=True, mininterval=1., file=sys.stdout) as progress:
         for offset in range(0, len(pending), ic['batch_size']):
             batch = pending[offset:offset + ic['batch_size']]

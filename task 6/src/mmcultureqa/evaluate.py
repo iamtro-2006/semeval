@@ -1,4 +1,4 @@
-"""Score a merged BF16 model (or legacy adapter) on held-out validation."""
+"""Score on official dev (or an explicitly saved legacy validation split)."""
 import argparse
 import hashlib
 import json
@@ -26,8 +26,8 @@ def main():
         config_file = directory / 'best_model/run_config.json'
     cfg = json.loads(config_file.read_text(encoding='utf-8'))
     split = cfg['data']['eval_split']
-    if split != 'validation':
-        raise ValueError('Final validation evaluation requires data.eval_split=validation')
+    if split not in {'dev', 'validation'}:
+        raise ValueError('Evaluation requires labelled dev (or legacy validation), never devtest/test')
     manifest = path(cfg['data']['manifest_dir'])
     for filename in (f'{split}.jsonl', f'{cfg["data"]["train_split"]}.jsonl'):
         expected = cfg.get('manifests', {}).get(filename)
@@ -43,6 +43,7 @@ def main():
     selected = validation[:args.limit] if args.limit else validation
     if not selected or any(not r.get('answer') for r in selected):
         raise ValueError('Validation must contain labelled rows')
+    # Keep the report-directory API; evaluation.json records the actual dataset split.
     name = 'validation' if len(selected) == len(validation) else f'validation_subset_{len(selected)}'
     if args.prompt_mode == 'cot':
         name += '_cot'

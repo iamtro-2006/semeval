@@ -236,7 +236,8 @@ print(ROOT)
                     'learning_curves.png', 'validation/scores.json', 'validation/evaluation.json',
                     'validation/predictions.jsonl', 'validation_subset_4/scores.json'],
             'predictions': ['sft_devtest.jsonl', 'grpo_devtest.jsonl', 'sft_test.jsonl',
-                            'grpo_test/run.json', 'sft_test_scores.json', 'sft_devtest.traces.jsonl'],
+                            'grpo_test/run.json', 'sft_test_scores.json', 'sft_devtest.traces.jsonl',
+                            'sft_dev.jsonl', 'sft_dev/run.json', 'sft_dev_scores.json'],
             'reasoning': ['train_reasoning.jsonl', 'dataset.json', 'generation.json',
                           'attempts.jsonl', 'rejected.jsonl', 'audit_sample.jsonl'],
             'inference_comparison': ['settings.json', 'comparison.html', 'comparison.csv', 'comparison.json',
@@ -340,7 +341,7 @@ print(ROOT)
             cfg = config()
         manifest = self.project / 'data/prepared'
         write_jsonl(manifest / 'train.jsonl', [dict(id='train-1', image='train.jpg', question='Train?', answer='train-gold')])
-        write_jsonl(manifest / 'validation.jsonl', [dict(id='val-1', image='val.jpg', question='Val?', answer='val-gold')])
+        write_jsonl(manifest / 'dev.jsonl', [dict(id='val-1', image='val.jpg', question='Val?', answer='val-gold')])
         adapter = self.project / 'outputs/sft/final'
         adapter.mkdir(parents=True)
         (adapter / 'adapter_config.json').write_text('{"r": 16}', encoding='utf-8')
@@ -383,12 +384,16 @@ print(ROOT)
         with patch.object(sys, 'argv', ['test', '--config', str(self.project / 'configs/sft.yaml')]):
             cfg = config()
         self.assertIsNone(cfg['data']['limit'])
+        self.assertEqual(cfg['data']['eval_split'], 'dev')
         self.assertIsNone(cfg['monitor']['limit'])
         from mmcultureqa.common import write_jsonl
         write_jsonl(self.project / 'data/prepared/validation.jsonl', [
+            dict(id='old-holdout', image='old.jpg', question='Wrong split?', answer='DO_NOT_EVALUATE')])
+        write_jsonl(self.project / 'data/prepared/dev.jsonl', [
             dict(id=f'val-{i}', image=f'val-{i}.jpg', question='Val?', answer='Gold') for i in range(1000)])
         args = build_arguments(cfg, 'sft')
         self.assertEqual(len(Path(args['val_dataset'][0]).read_text(encoding='utf-8').splitlines()), 1000)
+        self.assertNotIn('DO_NOT_EVALUATE', Path(args['val_dataset'][0]).read_text(encoding='utf-8'))
         self.assertEqual(args['acc_strategy'], 'token')
         self.assertNotIn('quant_bits', args)
         self.assertFalse(args['predict_with_generate'])
@@ -398,7 +403,7 @@ print(ROOT)
         self.assertIsNone(args['save_total_limit'])
         self.assertFalse(args['load_best_model_at_end'])
         self.assertEqual(args['num_train_epochs'], 1.2)
-        self.assertEqual(args['learning_rate'], 2e-4)
+        self.assertEqual(args['learning_rate'], cfg['training']['learning_rate'])
         self.assertEqual(args['label_smoothing_factor'], 0.0)
         self.assertEqual(args['lora_rank'], 32)
         self.assertEqual(args['lora_alpha'], 64)
@@ -592,7 +597,7 @@ print(ROOT)
         from mmcultureqa.training.swift_backend import build_arguments
         rows = [dict(id=f'val-{i}', image=f'val-{i}.jpg', question=f'Question {i}?', answer=f'Answer {i}')
                 for i in range(30)]
-        manifest = self.project / 'data/prepared/validation.jsonl'
+        manifest = self.project / 'data/prepared/dev.jsonl'
         write_jsonl(manifest, rows)
         cfg['monitor']['limit'] = 8
         cfg['training']['seed'] = 123  # validation sampling stays at seed 42
@@ -655,6 +660,8 @@ print(ROOT)
         self.assertTrue(inferred[1]['model']['local_files_only'])
         report = json.loads((run / 'validation/evaluation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['model_artifact'], 'merged_bf16')
+        self.assertEqual(report['split'], 'dev')
+        self.assertEqual(inferred[1]['inference']['split'], 'dev')
         with patch.object(sys, 'argv', ['evaluate', '--run-dir', str(run), '--prompt-mode', 'cot']), patch('subprocess.run', side_effect=child):
             evaluate.main()
         cot = inferred[-1]
@@ -677,7 +684,7 @@ print(ROOT)
         train = read_jsonl(self.project / 'data/prepared/train.jsonl')
         train.append(dict(id='train-2', image='second.jpg', question='Second?', answer='second-gold'))
         write_jsonl(self.project / 'data/prepared/train.jsonl', train)
-        validation = read_jsonl(self.project / 'data/prepared/validation.jsonl')
+        validation = read_jsonl(self.project / 'data/prepared/dev.jsonl')
         prompts, calls = [], []
         good = 'Native thinking</think>' + json.dumps({'supported': True, 'steps': [
             'Locate the visible object at the image centre.',
@@ -750,7 +757,7 @@ print(ROOT)
         with patch.object(sys, 'argv', ['sft', '--config', str(self.project / 'configs/sft_reasoning.yaml')]):
             cfg = config()
         train = read_jsonl(self.project / 'data/prepared/train.jsonl')
-        validation = read_jsonl(self.project / 'data/prepared/validation.jsonl')
+        validation = read_jsonl(self.project / 'data/prepared/dev.jsonl')
         directory = self.project / cfg['data']['reasoning_dir']
         accepted = [{**train[0], 'reasoning': '1. Observe the object.\n2. Apply cultural knowledge.\n3. Derive the answer.'}]
         write_jsonl(directory / 'train_reasoning.jsonl', accepted)
@@ -1025,7 +1032,7 @@ print(ROOT)
                 report.mkdir()
                 value = {'checkpoint-125': 0.81, 'checkpoint-250': 0.89, 'checkpoint-375': 0.85}[folder.name]
                 (report / 'scores.json').write_text(json.dumps({'result': [{'en': {'BERTScore-F1': value}}]}))
-                (report / 'evaluation.json').write_text(json.dumps(dict(full_validation=True,
+                (report / 'evaluation.json').write_text(json.dumps(dict(split='dev', full_validation=True,
                     evaluated_rows=1, model_artifact='merged_bf16')))
             else:
                 self.fail(module)
@@ -1033,6 +1040,8 @@ print(ROOT)
             selection = select_checkpoint(run)
             self.assertEqual(Path(selection['best_model_checkpoint']).name, 'checkpoint-250')
             self.assertEqual(selection['best_metric'], 0.89)
+            self.assertEqual(selection['eval_split'], 'dev')
+            self.assertEqual(selection['metric_for_best_model'], 'dev_bertscore_f1')
             self.assertTrue((run / 'best_model/model.safetensors').is_file())
             self.assertFalse(list((run / 'checkpoint_selection').glob('*/best_model')))
             self.assertEqual(len(list(run.glob('checkpoint-*'))), 3)
@@ -1208,7 +1217,7 @@ print(ROOT)
         from mmcultureqa.inference import predict
         model = self.project / 'outputs/direct/best_model'
         merged_fixture(model)
-        write_jsonl(self.project / 'data/prepared/validation.jsonl', [
+        write_jsonl(self.project / 'data/prepared/dev.jsonl', [
             dict(id='v1', image='v1.jpg', question='One?', answer='gold one'),
             dict(id='v2', image='v2.jpg', question='Two?', answer='gold two')])
         observed = []
@@ -1218,7 +1227,7 @@ print(ROOT)
             return lambda rows: ['<think>Relevant reasoning.</think><answer>Final only</answer>', '<think>Looping forever']
 
         argv = ['predict', '--config', str(self.project / 'configs/inference.yaml'),
-                '--set', 'model.name=' + json.dumps(str(model)), '--set', 'inference.split=validation',
+                '--set', 'model.name=' + json.dumps(str(model)), '--set', 'inference.split=dev',
                 '--set', 'inference.prompt_mode=cot', '--set', 'inference.on_format_error=empty',
                 '--set', 'inference.prompt_file=' + json.dumps(str(self.project / 'prompts/qa_cot.txt'))]
         captured = StringIO()
@@ -1309,6 +1318,113 @@ print(ROOT)
             self.assertEqual(commands[-1][2], 'mmcultureqa.select_checkpoint')
 
 
+    def test_prepare_preserves_official_train_and_dev_without_holdout(self):
+        self.grpo_config()
+        import io
+        import zipfile
+        from PIL import Image
+        from mmcultureqa.common import read_jsonl, write_jsonl
+        from mmcultureqa.data.prepare import prepare
+
+        raw = self.project / 'data/raw'
+        prepared = self.project / 'data/prepared'
+        raw.mkdir(parents=True)
+        (raw / 'REVISION').write_text('fixture-revision', encoding='utf-8')
+        payload = io.BytesIO()
+        Image.new('RGB', (8, 8), 'red').save(payload, format='PNG')
+        expected = {}
+        for split, size in (('train', 3), ('dev', 2), ('devtest', 1)):
+            # Two train questions share an image; neither can be removed as holdout.
+            rows = [dict(id=f'{split}-{i}', image=f'images/{split}-{i // 2}.png',
+                         question=f'Question {i}?', answer='Gold' if split != 'devtest' else '')
+                    for i in range(size)]
+            expected[split] = rows
+            write_jsonl(raw / 'qa/mena' / f'{split}_en.jsonl', rows)
+            (raw / 'archives').mkdir(exist_ok=True)
+            with zipfile.ZipFile(raw / 'archives' / f'images_mena_{split}.zip', 'w') as archive:
+                for name in {r['image'] for r in rows}:
+                    archive.writestr(name, payload.getvalue())
+        write_jsonl(prepared / 'train.jsonl', expected['train'][:1])
+        write_jsonl(prepared / 'validation.jsonl', expected['train'][1:])
+        with redirect_stdout(StringIO()):
+            prepare(raw, prepared)
+        for split, rows in expected.items():
+            actual = read_jsonl(prepared / f'{split}.jsonl')
+            self.assertEqual([r['id'] for r in actual], [r['id'] for r in rows])
+            self.assertTrue(all((self.project / r['image']).is_file() for r in actual))
+        self.assertFalse((prepared / 'validation.jsonl').exists())
+        report = json.loads((prepared / 'inspection.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['evaluation_split'], 'dev')
+        self.assertEqual(report['prepared_counts'], {'train': 3, 'dev': 2, 'devtest': 1})
+        self.assertEqual(set(report['manifest_sha256']), {'train.jsonl', 'dev.jsonl', 'devtest.jsonl'})
+
+    def test_inference_dev_uses_saved_generation_settings_and_uploads_scores(self):
+        ns, commands, copies = self.experiment('04_inference_colab')
+        original_copy = ns['copy']
+
+        def copy(source, destination, *args):
+            original_copy(source, destination, *args)
+            if str(source).endswith('/best_model'):
+                file = Path(destination) / 'run_config.json'
+                saved = json.loads(file.read_text(encoding='utf-8'))
+                saved.update(training={'seed': 123}, monitor={'max_new_tokens': 512, 'dtype': 'float32'})
+                file.write_text(json.dumps(saved), encoding='utf-8')
+
+        ns['copy'] = copy
+        source = find_cell('04_inference_colab', 'INPUT_RUN_NAME =').replace("SPLIT = 'devtest'", "SPLIT = 'dev'")
+        exec(source, ns)
+        self.assertEqual(ns['SPLIT'], 'dev')
+        self.assertIn('training.seed=123', commands[0])
+        self.assertIn('inference.max_new_tokens=512', commands[0])
+        from mmcultureqa.common import write_jsonl
+        write_jsonl(self.project / 'data/prepared/dev.jsonl', [
+            dict(id='test', image='dev.jpg', question='Dev?', answer='Gold')])
+        scoring = []
+        ns['stream_run'] = lambda cmd, **kwargs: scoring.append(cmd) or subprocess.CompletedProcess(cmd, 0)
+        exec(find_cell('04_inference_colab', 'test_rows ='), ns)
+        self.assertEqual(scoring[0][2], 'mmcultureqa.score')
+        self.assertEqual(scoring[0][scoring[0].index('--dtype') + 1], 'float32')
+        self.assertTrue(str(scoring[0][-1]).endswith('sft_dev_scores.json'))
+
+    def test_inference_resume_rejects_changed_merged_checkpoint_and_seed(self):
+        self.grpo_config()
+        from mmcultureqa.common import write_jsonl
+        from mmcultureqa.inference import predict
+        model = self.project / 'outputs/resume/best_model'
+        merged_fixture(model)
+        write_jsonl(self.project / 'data/prepared/devtest.jsonl', [
+            dict(id='test', image='test.jpg', question='Test?')])
+        argv = ['predict', '--config', str(self.project / 'configs/inference.yaml'),
+                '--set', 'model.name=' + json.dumps(str(model))]
+        with patch.dict(sys.modules, {'torch': SimpleNamespace(), 'transformers': SimpleNamespace(set_seed=lambda s: None)}), \
+                patch.object(sys, 'argv', argv), \
+                patch('mmcultureqa.models.vllm_loading.load_vllm', return_value=lambda rows: ['Answer'] * len(rows)), \
+                patch('mmcultureqa.inference.predict.provenance'), redirect_stdout(StringIO()):
+            predict.main()
+            predict.main()
+            (model / 'merge.json').write_text(json.dumps({'signature': 'new-weights'}), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'mismatch'):
+                predict.main()
+            (model / 'merge.json').write_text(json.dumps({'signature': 'fixture'}), encoding='utf-8')
+            with patch.object(sys, 'argv', argv + ['--set', 'training.seed=123']):
+                with self.assertRaisesRegex(ValueError, 'mismatch'):
+                    predict.main()
+
+    def test_selection_and_evaluation_reject_final_submission_split(self):
+        cfg = self.grpo_config()
+        from mmcultureqa import evaluate
+        from mmcultureqa.select_checkpoint import select_checkpoint
+        run = self.project / 'outputs/invalid-evaluation'
+        run.mkdir(parents=True)
+        for split in ('train', 'devtest', 'test'):
+            cfg['data']['eval_split'] = split
+            (run / 'run.json').write_text(json.dumps(cfg), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'never devtest/test'):
+                select_checkpoint(run)
+            with patch.object(sys, 'argv', ['evaluate', '--run-dir', str(run)]):
+                with self.assertRaisesRegex(ValueError, 'never devtest/test'):
+                    evaluate.main()
+
     def test_teacher_and_student_smoke_use_100_seed42_training_rows(self):
         self.grpo_config()
         from mmcultureqa.common import config, read_jsonl, write_jsonl
@@ -1318,7 +1434,7 @@ print(ROOT)
             cfg = config()
         train = [dict(id=f'train-{i}', question=f'Question {i}?', answer=f'Gold {i}', image=f'image-{i}.jpg') for i in range(160)]
         write_jsonl(self.project / 'data/prepared/train.jsonl', train)
-        validation = read_jsonl(self.project / 'data/prepared/validation.jsonl')
+        validation = read_jsonl(self.project / 'data/prepared/dev.jsonl')
         before = random.getstate()
         selected = sample_rows(train, 100, 42)
         self.assertEqual(selected, random.Random(42).sample(train, 100))

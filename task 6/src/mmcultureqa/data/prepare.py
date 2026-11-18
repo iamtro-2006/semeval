@@ -22,12 +22,11 @@ def download(root, revision):
     (root / 'REVISION').write_text(revision, encoding='utf-8')
 
 
-def prepare(root, destination, validation_size, seed):
+def prepare(root, destination):
     from PIL import Image
-    import random
     destination.mkdir(parents=True, exist_ok=True)
     report = {'source': REPO, 'revision': (root / 'REVISION').read_text(encoding='utf-8-sig').strip(),
-              'seed': seed, 'splits': {}}
+              'evaluation_split': 'dev', 'train_policy': 'full_original_train', 'splits': {}}
     datasets = {}
     all_ids, all_images = set(), set()
     for split in SPLITS:
@@ -71,19 +70,14 @@ def prepare(root, destination, validation_size, seed):
                                   'labelled': sum(bool(r.get('answer')) for r in rows),
                                   'unique_images': len(members), 'min_width': min(w for w, h in sizes),
                                   'max_width': max(w for w, h in sizes), 'archive_bytes': archive.stat().st_size}
-    train = datasets.pop('train')
-    if not 0 < validation_size < len(train):
-        raise ValueError('validation-size must be between 1 and train size - 1')
-    # Group by image, so repeated views/questions on the same image cannot leak.
-    groups = sorted({r['image'] for r in train})
-    random.Random(seed).shuffle(groups)
-    holdout = set(groups[:validation_size])
-    datasets['train'] = [r for r in train if r['image'] not in holdout]
-    datasets['validation'] = [r for r in train if r['image'] in holdout]
+    # Preserve the official split contract: full train, labelled dev, final devtest.
     for name, rows in datasets.items():
         write_jsonl(destination / f'{name}.jsonl', rows)
+    # Remove only the obsolete generated holdout manifest after successful preparation.
+    (destination / 'validation.jsonl').unlink(missing_ok=True)
     report['prepared_counts'] = {k: len(v) for k, v in datasets.items()}
-    report['manifest_sha256'] = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in destination.glob('*.jsonl')}
+    report['manifest_sha256'] = {f'{s}.jsonl': hashlib.sha256((destination / f'{s}.jsonl').read_bytes()).hexdigest()
+                                 for s in SPLITS}
     (destination / 'inspection.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps(report, indent=2))
 
@@ -94,14 +88,12 @@ def main():
     parser.add_argument('--root', default='data/raw')
     parser.add_argument('--destination', default='data/prepared')
     parser.add_argument('--revision', default=REVISION)
-    parser.add_argument('--validation-size', type=int, default=1000, help='Number of image groups held out from train')
-    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
     root = path(args.root)
     if args.command == 'download':
         download(root, args.revision)
     else:
-        prepare(root, path(args.destination), args.validation_size, args.seed)
+        prepare(root, path(args.destination))
 
 
 if __name__ == '__main__':

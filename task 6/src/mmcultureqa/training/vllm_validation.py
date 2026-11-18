@@ -74,7 +74,7 @@ def install_validation(trainer, cfg, processor):
         self.save_model(str(adapter))
         processor.save_pretrained(adapter)
         canonical_adapter(adapter, cfg['model']['name'])
-        validation = read_jsonl(path(cfg['data']['manifest_dir']) / 'validation.jsonl')
+        validation = read_jsonl(path(cfg['data']['manifest_dir']) / f'{cfg["data"]["eval_split"]}.jsonl')
         limit = cfg['monitor'].get('limit')
         if limit is not None and limit < len(validation):
             import random

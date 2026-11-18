@@ -18,13 +18,34 @@ Both SFT notebooks use configs/sft.yaml. MODEL_SIZE selects the model identifier
 revision. Use a distinct RUN_NAME for each experiment; changing MODEL_SIZE does not rename a run.
 All project paths resolve under /content/semeval/task 6 on Colab.
 
+## Dataset protocol and migration
+
+Use the complete official `train` split for training, the labelled official `dev` split
+for periodic validation and checkpoint selection, and `devtest` for final submission.
+Preparation no longer removes a holdout from train. `data.eval_split` defaults to `dev`.
+Reports remain under `validation/` for compatibility; `evaluation.json.split` and
+`selection.json.eval_split` identify `dev`, and the selection metric is `dev_bertscore_f1`.
+
+No data re-upload or new raw download is needed if `task6-data/raw` already contains
+`REVISION`, all three `qa/mena/*_en.jsonl` files and their image ZIPs. On Colab, update
+the code and rerun the existing data preparation cell. It rebuilds full `train.jsonl`,
+`dev.jsonl`, and `devtest.jsonl` from raw, and removes the obsolete generated
+`validation.jsonl`. The raw files are unchanged.
+
+Start a fresh RUN_NAME when training under this protocol: the training data and total
+optimizer steps change. Old saved runs retain their original split metadata; their
+reported holdout F1 must not be relabelled as dev F1. Models already trained on the old
+train subset can still be scored on dev through notebook 04, but full-train training
+requires a new run. Archived reasoning datasets also need regeneration if their source
+train manifest changes.
+
 ## Shared recipe
 
 BF16 frozen base + language LoRA (not NF4): r=32, alpha=64, dropout=0.05, attention q/k/v/o
 and MLP gate/up/down. Microbatch 4, accumulation 2, effective batch 8 on one GPU.
-1.2 epochs, peak LR 2e-4, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.0 (disabled).
+1.2 epochs, peak LR 1e-5, cosine schedule, warmup 3%, weight decay 0.01, grad norm 1.0; label_smoothing_factor=0.0 (disabled).
 Save every 225 optimizer steps; evaluate loss every 125 steps. SFT_OVERRIDES can change these explicitly.
-During training, full validation computes loss/token accuracy at step 0 and every 125 steps.
+During training, full official dev validation computes loss/token accuracy at step 0 and every 125 steps.
 There is NO vLLM, generation F1, scorer, sleep/wake or CPU model swapping during SFT.
 All checkpoints are retained (save_total_limit=null); the trainer does not restore a provisional best.
 
@@ -50,12 +71,12 @@ without a custom label smoother or next-token alignment override.
 The training cell finishes and its process exits, releasing the training model and optimizer.
 The next cell calls `python -m mmcultureqa.select_checkpoint --run-dir <SFT>`:
 
-1. Enumerate every local checkpoint-N in numeric order (normally 6 checkpoints / 1350 steps).
+1. Enumerate every local checkpoint-N in numeric order.
 2. Reload the original BF16 base and safe-merge that candidate adapter into a temporary model.
-3. Exit the merge process. Generate ALL 1000 validation answers using the complete merged model.
+3. Exit the merge process. Generate answers for ALL official dev rows using the complete merged model.
 4. Exit generation. Load mmBERT separately and score with the unchanged organizer scorer.
 5. Save scores/predictions for that checkpoint, then delete only its temporary merged weights.
-6. Select the highest F1 (earliest step breaks ties), export the winner to best_model/ and copy
+6. Select the highest dev F1 (earliest step breaks ties), export the winner to best_model/ and copy
    its validation report to validation/. No redundant final generation is run.
 
 Generation uses the SAME configs/inference.yaml defaults, predict entry point and vLLM loader
@@ -87,13 +108,17 @@ Notebook 04 downloads task6-runs/<INPUT_RUN_NAME>/<MODEL_STAGE>/best_model from 
 Drive root. Model family, prompt and image preprocessing restore from the exported artifact.
 Predictions and uploads use INPUT_RUN_NAME, avoiding collisions between 4B and 8B results.
 Notebook 04 defaults to experiment07; choose another INPUT_RUN_NAME to change both model source and result destination.
-Use devtest/test there; validation belongs to SFT. Unlabelled splits cannot be scored locally.
+Use SPLIT='dev' to generate and score development predictions, or SPLIT='devtest' for final
+submission. Both predictions and dev scores upload to Drive. No test manifest is prepared.
+Inference restores the saved run's seed, generation token budget and scorer precision.
+Unlabelled splits cannot be scored locally.
 Inference vLLM settings live in configs/inference.yaml; CPU offload is configurable without file patching.
-Never bypass prediction signature checks to resume another model into an existing output file.
+Prediction signatures include the merged checkpoint identity and seed. Never bypass a
+signature mismatch: choose a fresh output filename or run for changed weights/configuration.
 
 Runtime: requirements-vllm.txt (Swift 3.11.3, Transformers 4.57.6, torch 2.8.0, vLLM 0.11.0).
 The organizer scorer is unchanged. Dataset revision e850ede73e2f1ef3dde12e0210de67d107247ef0;
-image-disjoint seed-42 split, 9000 train / 1000 validation. No automatic CoT evaluation.
+official train/dev/devtest boundaries are preserved, with no train holdout. No automatic CoT evaluation.
 
 ## Verification
 

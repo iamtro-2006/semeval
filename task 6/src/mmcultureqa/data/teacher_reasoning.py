@@ -28,10 +28,10 @@ def read_journal(file):
 
 def generate_dataset(cfg):
     tc = cfg['teacher']
-    if cfg['data']['train_split'] != 'train' or cfg['data']['eval_split'] != 'validation':
+    if cfg['data']['train_split'] != 'train' or cfg['data']['eval_split'] not in {'dev', 'validation'}:
         raise ValueError('Teacher synthesis is restricted to the prepared train split')
     train = read_jsonl(path(cfg['data']['manifest_dir']) / 'train.jsonl')
-    validation = read_jsonl(path(cfg['data']['manifest_dir']) / 'validation.jsonl')
+    validation = read_jsonl(path(cfg['data']['manifest_dir']) / f'{cfg["data"]["eval_split"]}.jsonl')
     if not train or len({r['id'] for r in train}) != len(train) or any(not r.get('answer') for r in train):
         raise ValueError('Expected unique, labelled training rows')
     if ({r['id'] for r in train} & {r['id'] for r in validation}
