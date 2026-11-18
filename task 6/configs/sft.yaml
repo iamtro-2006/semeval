@@ -28,7 +28,7 @@ training:
   eval_on_start: true
   output_dir: outputs/runs/experiment03/sft
   num_train_epochs: 1.2
-  learning_rate: 0.0002
+  learning_rate: 0.00001
   label_smoothing_factor: 0.0
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 1
